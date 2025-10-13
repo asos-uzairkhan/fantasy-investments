@@ -69,6 +69,26 @@ This application is configured for Azure Web App deployment:
    - `NODE_ENV`: production
 3. Deploy using Git or Azure CLI
 
+## Quick Start
+
+1. **Seed the database with sample data**:
+```bash
+npm run seed
+```
+
+This creates:
+- Admin user: `admin@fantasystocks.com` / `admin123`
+- 15 sample stocks (AAPL, MSFT, GOOGL, etc.)
+
+2. **Start the development servers**:
+```bash
+npm run dev
+```
+
+3. **Access the application**:
+- Frontend: http://localhost:3000
+- Backend API: http://localhost:3001
+
 ## Usage
 
 ### For Players
@@ -80,9 +100,10 @@ This application is configured for Azure Web App deployment:
 
 ### For Admins
 
-1. **Manage Stocks**: Add, edit, or delete stocks from the available pool
-2. **Record Prices**: Record monthly closing prices for each stock
-3. **Monitor**: View all stocks and their current prices
+1. **Login**: Use `admin@fantasystocks.com` / `admin123`
+2. **Manage Stocks**: Add, edit, or delete stocks from the available pool
+3. **Record Prices**: Record monthly closing prices for each stock
+4. **Monitor**: View all stocks and their current prices
 
 ## Database Schema
 
