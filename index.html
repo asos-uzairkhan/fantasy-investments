@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fantasy Investments 2026 - Kids Investment Competition</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0"></script>
+</head>
+<body>
+    <header>
+        <div class="header-content">
+            <h1>🏆 Fantasy Investments 2026</h1>
+            <p class="subtitle">Kids Investment Competition - Can you beat the S&P 500?</p>
+        </div>
+    </header>
+
+    <main>
+        <section class="rules-section">
+            <h2>📜 Competition Rules</h2>
+            <div class="rules-content">
+                <ul>
+                    <li><strong>Investment Options (at least 1 of each):</strong> Funds (no more than 1), stocks/shares, commodities, and cryptocurrencies</li>
+                    <li><strong>Starting Capital:</strong> Each participant starts with £50 virtual money</li>
+                    <li><strong>Equal Distribution:</strong> Your £50 is split equally across all active investments for the day</li>
+                    <li><strong>Substitute Investments:</strong> Every month, you can substitute one investment for another with substitutions taking effect at the start of the next month</li>
+                    <li><strong>Participation Prize:</strong> £5 for beating the S&P 500</li>
+                    <li><strong>Winner Prize:</strong> Profit you made (e.g. Winning value of £67 will earn you a prize of £17)</li>
+                    <li><strong>Duration:</strong> Start of January (01/01/2026) - End of December (31/12/2026)</li>
+                </ul>
+            </div>
+        </section>
+
+        <section class="sponsors-section">
+            <h2>🎯 Our Sponsors</h2>
+            <div class="sponsors-container">
+                <div class="sponsor-card">
+                    <img src="images/uzair_khan.jpg" alt="Uzair Khan" class="sponsor-logo">
+                    <h3>Uzair Khan</h3>
+                </div>
+                <div class="sponsor-card">
+                    <img src="images/yahoo_finance.jpg" alt="Yahoo Finance" class="sponsor-logo">
+                    <h3>Yahoo Finance</h3>
+                </div>
+                <div class="sponsor-card">
+                    <img src="images/asos.jpg" alt="ASOS" class="sponsor-logo">
+                    <h3>ASOS</h3>
+                </div>
+                <div class="sponsor-card">
+                    <img src="images/github.jpg" alt="GitHub" class="sponsor-logo">
+                    <h3>GitHub</h3>
+                </div>
+            </div>
+        </section>
+
+        <nav class="tabs">
+            <button class="tab-button active" data-tab="leaderboard">🏆 Leaderboard</button>
+            <button class="tab-button" data-tab="symbols">📊 Symbol Performance</button>
+        </nav>
+
+        <div class="tab-content active" id="leaderboard-tab">
+            <section class="stats-overview">
+                <div class="stat-card">
+                    <h3>Starting Amount</h3>
+                    <p class="stat-value">£50.00</p>
+                </div>
+                <div class="stat-card">
+                    <h3>Current Leader</h3>
+                    <p class="stat-value" id="current-leader">Loading...</p>
+                </div>
+                <div class="stat-card">
+                    <h3>S&P 500 Return</h3>
+                    <p class="stat-value" id="sp500-return">Loading...</p>
+                </div>
+                <div class="stat-card">
+                    <h3>Participants Beating S&P</h3>
+                    <p class="stat-value" id="beating-sp500">Loading...</p>
+                </div>
+            </section>
+
+            <section class="chart-section">
+                <h2>📊 Profit & Loss Leaderboard</h2>
+                <p class="chart-description">Green bars show profits, red bars show losses. The black line shows S&P 500 performance.</p>
+                <div class="chart-container tornado-container">
+                    <canvas id="tornadoChart"></canvas>
+                </div>
+            </section>
+
+            <section class="chart-section">
+                <h2>📈 Portfolio Value Over Time</h2>
+                <p class="chart-description">Track how each participant's portfolio has grown or shrunk compared to the S&P 500 benchmark.</p>
+                <div class="chart-container">
+                    <canvas id="lineChart"></canvas>
+                </div>
+            </section>
+
+            <section class="rankings-section">
+                <h2>🥇 Current Rankings</h2>
+                <div class="rankings-table-container">
+                    <table id="rankings-table">
+                        <thead>
+                            <tr>
+                                <th>Rank</th>
+                                <th>Participant</th>
+                                <th>Current Value</th>
+                                <th>Profit/Loss</th>
+                                <th>% Return</th>
+                                <th>vs S&P 500</th>
+                            </tr>
+                        </thead>
+                        <tbody id="rankings-body">
+                            <!-- Populated by JavaScript -->
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+        </div>
+
+        <div class="tab-content" id="symbols-tab">
+            <section class="chart-section">
+                <h2>📈 Individual Symbol Price</h2>
+                <p class="chart-description">View the price history of any symbol over time.</p>
+                <div class="controls">
+                    <label for="single-symbol-select">Select Symbol:</label>
+                    <select id="single-symbol-select">
+                        <option value="">-- Choose a symbol --</option>
+                    </select>
+                </div>
+                <div class="chart-container">
+                    <canvas id="singleSymbolChart"></canvas>
+                </div>
+            </section>
+
+            <section class="chart-section">
+                <h2>💰 Investment Return Simulator</h2>
+                <p class="chart-description">See how your £50 would have performed if invested in selected symbols from a start date.</p>
+                <div class="controls">
+                    <div class="control-group">
+                        <label for="start-date-select">Start Date:</label>
+                        <select id="start-date-select">
+                            <option value="">-- Choose a date --</option>
+                        </select>
+                    </div>
+                    <div class="control-group">
+                        <label for="multi-symbol-select">Select Symbols (Hold Ctrl/Cmd for multiple):</label>
+                        <select id="multi-symbol-select" multiple size="10">
+                        </select>
+                    </div>
+                </div>
+                <div class="chart-container">
+                    <canvas id="multiSymbolChart"></canvas>
+                </div>
+            </section>
+        </div>
+    </main>
+
+    <footer>
+        <p>Fantasy Investments 2026 | Data updated monthly | Good luck everyone! 🍀</p>
+    </footer>
+
+    <script src="script.js"></script>
+</body>
+</html>
