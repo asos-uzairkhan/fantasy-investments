@@ -53,7 +53,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 async function discoverParticipants() {
     // List of candidate names to try (alphabetically ordered)
     const candidateNames = [
-        'Alpha', 'Beta', 'Charlie', 'Delta', 'Echo',
+        'Alpha', 'Bravo', 'Charlie', 'Delta', 'Echo',
         'Foxtrot', 'Golf', 'Hotel', 'India', 'Juliet',
         'Kilo', 'Lima', 'Mike', 'November', 'Oscar',
         'Papa', 'Quebec', 'Romeo', 'Sierra', 'Tango',
