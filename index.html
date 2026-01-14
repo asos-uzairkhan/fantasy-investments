@@ -16,7 +16,19 @@
         </div>
     </header>
 
-    <main>
+    <div id="login-overlay" class="login-overlay">
+        <div class="login-box">
+            <h2>🔐 Login to Fantasy Investments</h2>
+            <p>Please enter your codename to continue.</p>
+            <div class="input-group">
+                <input type="text" id="username-input" placeholder="Username" autocomplete="off" disabled>
+                <button id="login-button" disabled>Loading...</button>
+            </div>
+            <p id="login-error" class="error-message"></p>
+        </div>
+    </div>
+
+    <main id="main-content" style="display: none;">
         <section class="rules-section">
             <h2>📜 Competition Rules</h2>
             <div class="rules-content">
@@ -52,7 +64,7 @@
 
         <nav class="tabs">
             <button class="tab-button active" data-tab="leaderboard">🏆 Leaderboard</button>
-            <button class="tab-button" data-tab="symbols">📊 Symbol Performance</button>
+            <button class="tab-button" data-tab="symbols">📊 Portfolio</button>
         </nav>
 
         <div class="tab-content active" id="leaderboard-tab">
@@ -114,7 +126,27 @@
         </div>
 
         <div class="tab-content" id="symbols-tab">
-            <section class="chart-section">
+            <section class="chart-section" id="user-portfolio-section" style="display: none;">
+                <h2>📁 My Portfolio</h2>
+                <p class="chart-description">Information on your current investments.</p>
+                <div class="rankings-table-container">
+                    <table id="portfolio-table">
+                        <thead>
+                            <tr>
+                                <th>Symbol</th>
+                                <th>Name</th>
+                                <th>Category</th>
+                                <th>Sector</th>
+                            </tr>
+                        </thead>
+                        <tbody id="portfolio-body">
+                            <!-- Populated by JavaScript -->
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <section class="chart-section" id="individual-symbol-section">
                 <h2>📈 Individual Symbol Price</h2>
                 <p class="chart-description">View the price history of any symbol over time.</p>
                 <div class="controls">
@@ -128,30 +160,17 @@
                 </div>
             </section>
 
-            <section class="chart-section">
-                <h2>💰 Investment Return Simulator</h2>
-                <p class="chart-description">See how your £50 would have performed if invested in selected symbols from a start date.</p>
-                <div class="controls">
-                    <div class="control-group">
-                        <label for="start-date-select">Start Date:</label>
-                        <select id="start-date-select">
-                            <option value="">-- Choose a date --</option>
-                        </select>
-                    </div>
-                    <div class="control-group">
-                        <label for="multi-symbol-select">Select Symbols (Hold Ctrl/Cmd for multiple):</label>
-                        <select id="multi-symbol-select" multiple size="10">
-                        </select>
-                    </div>
-                </div>
+            <section class="chart-section" id="monthly-performance-section" style="display: none;">
+                <h2>📅 Monthly Performance</h2>
+                <p class="chart-description">ROI for each of your investments from the start of the current month.</p>
                 <div class="chart-container">
-                    <canvas id="multiSymbolChart"></canvas>
+                    <canvas id="monthlyPerformanceChart"></canvas>
                 </div>
             </section>
         </div>
     </main>
 
-    <footer>
+    <footer id="main-footer" style="display: none;">
         <p>Fantasy Investments 2026 | Data updated monthly | Good luck everyone! 🍀</p>
     </footer>
 

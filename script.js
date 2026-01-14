@@ -14,6 +14,9 @@ let calculatedPortfolioData = []; // Calculated daily portfolio values
 let PARTICIPANTS = []; // Will be populated dynamically from investments folder
 let singleSymbolChartInstance = null; // Store chart instance for updates
 let multiSymbolChartInstance = null; // Store chart instance for updates
+let monthlyPerformanceChartInstance = null;
+let currentUser = null;
+let userPortfolioChartInstance = null;
 
 // Initialize the application
 document.addEventListener('DOMContentLoaded', async () => {
@@ -22,6 +25,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (window.location.protocol === 'file:') {
             console.warn('Running via file:// protocol. Fetch requests may be blocked by CORS policy.');
         }
+
+        // Setup Login Listeners
+        setupLoginListeners();
 
         await discoverParticipants();
         await loadAllData();
@@ -32,6 +38,16 @@ document.addEventListener('DOMContentLoaded', async () => {
         createLineChart();
         populateRankingsTable();
         
+        // Enable login
+        const loginBtn = document.getElementById('login-button');
+        const userInput = document.getElementById('username-input');
+        if (loginBtn && userInput) {
+            loginBtn.textContent = 'Login';
+            loginBtn.disabled = false;
+            userInput.disabled = false;
+            userInput.focus();
+        }
+
         // Initialize tabs
         initializeTabs();
         
@@ -887,3 +903,288 @@ function createMultiSymbolChart(symbols, startDate) {
         }
     });
 }
+
+// Login logic
+function setupLoginListeners() {
+    const loginBtn = document.getElementById('login-button');
+    const userInput = document.getElementById('username-input');
+
+    const attemptLogin = () => {
+        const username = userInput.value.trim();
+        if (username) handleLogin(username);
+    };
+
+    if (loginBtn) loginBtn.addEventListener('click', attemptLogin);
+    if (userInput) userInput.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') attemptLogin();
+    });
+}
+
+function handleLogin(username) {
+    // Case insensitive match
+    const participant = PARTICIPANTS.find(p => p.toLowerCase() === username.toLowerCase());
+    
+    if (participant) {
+        currentUser = participant;
+        
+        // Hide login, show main
+        const loginOverlay = document.getElementById('login-overlay');
+        const mainContent = document.getElementById('main-content');
+        const footer = document.getElementById('main-footer');
+        
+        if (loginOverlay) loginOverlay.style.display = 'none';
+        if (mainContent) mainContent.style.display = 'block';
+        if (footer) footer.style.display = 'block';
+        
+        // Update Symbol Tab
+        updateSymbolsTabForUser();
+        
+        // Resize charts to fit container after becoming visible
+        setTimeout(() => {
+           window.dispatchEvent(new Event('resize')); 
+        }, 100);
+        
+    } else {
+        const errorMsg = document.getElementById('login-error');
+        if (errorMsg) {
+            errorMsg.textContent = 'User not found. Please try again.';
+            // Jiggle animation or visual feedback could be added here
+            setTimeout(() => errorMsg.textContent = '', 3000);
+        }
+    }
+}
+
+function updateSymbolsTabForUser() {
+    // Switch sections
+    const individualSection = document.getElementById('individual-symbol-section');
+    const userSection = document.getElementById('user-portfolio-section');
+    const monthlySection = document.getElementById('monthly-performance-section');
+    
+    if (individualSection) individualSection.style.display = 'none';
+    if (userSection) userSection.style.display = 'block';
+    if (monthlySection) monthlySection.style.display = 'block';
+    
+    // Create Table
+    renderUserPortfolioTable();
+    // Create Chart
+    renderMonthlyPerformanceChart();
+}
+
+function renderMonthlyPerformanceChart() {
+    const canvas = document.getElementById('monthlyPerformanceChart');
+    if (!canvas || !currentUser) return;
+
+    const ctx = canvas.getContext('2d');
+    
+    // Determine dates
+    const allDates = getAllDates();
+    if (allDates.length === 0) return;
+    
+    const latestDate = allDates[allDates.length - 1]; // e.g., "2026-01-14"
+    // Get start of month from latest date
+    // Format is YYYY-MM-DD
+    const parts = latestDate.split('-');
+    const year = parts[0];
+    const month = parts[1];
+    const firstOfMonth = `${year}-${month}-01`;
+
+    // Active investments for this user
+    const activeInvestments = getActiveInvestments(currentUser, latestDate);
+    
+    const labels = [];
+    const data = [];
+    const backgroundColors = [];
+    const borderColors = [];
+
+    activeInvestments.forEach(inv => {
+        const symbol = inv.symbol;
+        
+        // Use price on or after first of month
+        const startPrice = getPriceOnOrAfterDate(symbol, firstOfMonth);
+        // Use price on or before latest date
+        const currentPrice = getPriceOnOrBeforeDate(symbol, latestDate);
+        
+        if (startPrice && currentPrice) {
+            const roi = ((currentPrice - startPrice) / startPrice) * 100;
+            labels.push(symbol);
+            data.push(roi);
+            
+            // Color coding
+            if (roi >= 0) {
+                backgroundColors.push('rgba(46, 204, 113, 0.6)'); // Green
+                borderColors.push('rgba(46, 204, 113, 1)');
+            } else {
+                backgroundColors.push('rgba(231, 76, 60, 0.6)'); // Red
+                borderColors.push('rgba(231, 76, 60, 1)');
+            }
+        }
+    });
+
+    if (monthlyPerformanceChartInstance) {
+        monthlyPerformanceChartInstance.destroy();
+    }
+
+    monthlyPerformanceChartInstance = new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels: labels,
+            datasets: [{
+                label: 'ROI (%)',
+                data: data,
+                backgroundColor: backgroundColors,
+                borderColor: borderColors,
+                borderWidth: 1
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: {
+                    display: false
+                },
+                title: {
+                    display: true,
+                    text: `Performance from ${firstOfMonth} to ${latestDate}`
+                },
+                tooltip: {
+                    callbacks: {
+                        label: function(context) {
+                            return `${context.raw.toFixed(2)}%`;
+                        }
+                    }
+                }
+            },
+            scales: {
+                y: {
+                    beginAtZero: true,
+                    grid: {
+                        color: '#f0f0f0'
+                    },
+                    title: {
+                        display: true,
+                        text: 'Return on Investment (%)'
+                    }
+                }
+            }
+        }
+    });
+}
+
+
+function renderUserPortfolioTable() {
+    const tbody = document.getElementById('portfolio-body');
+    if (!tbody || !currentUser) return;
+    
+    tbody.innerHTML = '';
+    
+    // Get active investments for current date (using context: Jan 14, 2026)
+    // In a real scenario, this might use current system date, but here we use context.
+    // However, calculatePortfolioValues uses strict dates. 
+    // To be safe, let's just list ALL unique symbols the user has invested in for the year 2026.
+    // As per rules, substitution is monthly, so "portfolio" is dynamic.
+    // The prompt asks for "symbols the user is invested in".
+    const investments = participantInvestments[currentUser] || [];
+    
+    // Unique symbols
+    const userSymbols = [...new Set(investments.map(inv => inv.symbol))];
+    
+    userSymbols.sort();
+    
+    userSymbols.forEach(symbol => {
+        const meta = getSymbolMetadata(symbol);
+        const tr = document.createElement('tr');
+        
+        const categoryClass = getCategoryClass(meta.category);
+        
+        tr.innerHTML = `
+            <td><strong>${symbol}</strong></td>
+            <td>${meta.name}</td>
+            <td><span class="category-badge ${categoryClass}">${meta.category}</span></td>
+            <td>${meta.sector}</td>
+        `;
+        
+        tbody.appendChild(tr);
+    });
+}
+
+function getCategoryClass(category) {
+    if (!category) return 'category-other';
+    switch (category.toLowerCase()) {
+        case 'stock': return 'category-stock';
+        case 'fund': return 'category-fund';
+        case 'cryptocurrency': return 'category-crypto';
+        case 'commodity': return 'category-commodity';
+        default: return 'category-other';
+    }
+}
+
+
+const SYMBOL_METADATA = {
+    'AAPL': { name: 'Apple Inc.', category: 'Stock', sector: 'Technology' },
+    'ALUMINIUM': { name: 'Aluminium', category: 'Commodity', sector: 'Materials' },
+    'AMD': { name: 'Advanced Micro Devices', category: 'Stock', sector: 'Technology' },
+    'AMZN': { name: 'Amazon.com Inc.', category: 'Stock', sector: 'Consumer Cyclical' },
+    'ARAMCO': { name: 'Saudi Aramco', category: 'Stock', sector: 'Energy' },
+    'ASML': { name: 'ASML Holding', category: 'Stock', sector: 'Technology' },
+    'AVGO': { name: 'Broadcom Inc.', category: 'Stock', sector: 'Technology' },
+    'AXP': { name: 'American Express', category: 'Stock', sector: 'Financial Services' },
+    'AZN': { name: 'AstraZeneca', category: 'Stock', sector: 'Healthcare' },
+    'BAC': { name: 'Bank of America', category: 'Stock', sector: 'Financial Services' },
+    'BP': { name: 'BP p.l.c.', category: 'Stock', sector: 'Energy' },
+    'BRK': { name: 'Berkshire Hathaway', category: 'Stock', sector: 'Financial Services' },
+    'BTC': { name: 'Bitcoin', category: 'Cryptocurrency', sector: 'Digital Assets' },
+    'BYDDF': { name: 'BYD Co.', category: 'Stock', sector: 'Automotive' },
+    'CJ6': { name: 'Unknown Asset', category: 'Other', sector: 'Other' },
+    'COPPER': { name: 'Copper', category: 'Commodity', sector: 'Materials' },
+    'DIA': { name: 'SPDR Dow Jones ETF', category: 'Fund', sector: 'Index ETF' },
+    'DOGE': { name: 'Dogecoin', category: 'Cryptocurrency', sector: 'Digital Assets' },
+    'ETH': { name: 'Ethereum', category: 'Cryptocurrency', sector: 'Digital Assets' },
+    'FSLR': { name: 'First Solar', category: 'Stock', sector: 'Energy' },
+    'GOLD': { name: 'Gold', category: 'Commodity', sector: 'Precious Metals' },
+    'GOOGL': { name: 'Alphabet Inc.', category: 'Stock', sector: 'Technology' },
+    'GSK': { name: 'GSK plc', category: 'Stock', sector: 'Healthcare' },
+    'HIWS': { name: 'Unknown Asset', category: 'Other', sector: 'Other' },
+    'HLAL': { name: 'Wahed FTSE USA Shariah ETF', category: 'Fund', sector: 'Shariah Compliant' },
+    'ISWD': { name: 'iShares MSCI World Islamic ETF', category: 'Fund', sector: 'Shariah Compliant' },
+    'JNJ': { name: 'Johnson & Johnson', category: 'Stock', sector: 'Healthcare' },
+    'JPM': { name: 'JPMorgan Chase', category: 'Stock', sector: 'Financial Services' },
+    'KO': { name: 'Coca-Cola', category: 'Stock', sector: 'Consumer Defensive' },
+    'LLY': { name: 'Eli Lilly and Co', category: 'Stock', sector: 'Healthcare' },
+    'MA': { name: 'Mastercard', category: 'Stock', sector: 'Financial Services' },
+    'META': { name: 'Meta Platforms', category: 'Stock', sector: 'Technology' },
+    'MRNA': { name: 'Moderna', category: 'Stock', sector: 'Healthcare' },
+    'MSFT': { name: 'Microsoft Corp', category: 'Stock', sector: 'Technology' },
+    'MU': { name: 'Micron Technology', category: 'Stock', sector: 'Technology' },
+    'NKE': { name: 'Nike Inc.', category: 'Stock', sector: 'Consumer Cyclical' },
+    'NOVN': { name: 'Novartis', category: 'Stock', sector: 'Healthcare' },
+    'NVDA': { name: 'NVIDIA Corp', category: 'Stock', sector: 'Technology' },
+    'OIL': { name: 'Crude Oil', category: 'Commodity', sector: 'Energy' },
+    'OMER': { name: 'Omeros Corp', category: 'Stock', sector: 'Healthcare' },
+    'PG': { name: 'Procter & Gamble', category: 'Stock', sector: 'Consumer Defensive' },
+    'PYPL': { name: 'PayPal', category: 'Stock', sector: 'Financial Services' },
+    'QBTS': { name: 'D-Wave Quantum', category: 'Stock', sector: 'Technology' },
+    'QCOM': { name: 'Qualcomm', category: 'Stock', sector: 'Technology' },
+    'QQQ': { name: 'Invesco QQQ', category: 'Fund', sector: 'Index ETF' },
+    'ROG': { name: 'Roche Holding', category: 'Stock', sector: 'Healthcare' },
+    'SAMSUNG': { name: 'Samsung Electronics', category: 'Stock', sector: 'Technology' },
+    'SHEL': { name: 'Shell plc', category: 'Stock', sector: 'Energy' },
+    'SHIB': { name: 'Shiba Inu', category: 'Cryptocurrency', sector: 'Digital Assets' },
+    'SILVER': { name: 'Silver', category: 'Commodity', sector: 'Precious Metals' },
+    'SLB': { name: 'Schlumberger', category: 'Stock', sector: 'Energy' },
+    'SOL': { name: 'Solana', category: 'Cryptocurrency', sector: 'Digital Assets' },
+    'SONY': { name: 'Sony Group', category: 'Stock', sector: 'Technology' },
+    'SPX': { name: 'S&P 500', category: 'Fund', sector: 'Index' },
+    'SSW': { name: 'Sibanye Stillwater', category: 'Stock', sector: 'Basic Materials' },
+    'TSLA': { name: 'Tesla Inc.', category: 'Stock', sector: 'Automotive' },
+    'UMMA': { name: 'Wahed Dow Jones Islamic ETF', category: 'Fund', sector: 'Shariah Compliant' },
+    'USDT': { name: 'Tether', category: 'Cryptocurrency', sector: 'Stablecoin' },
+    'V': { name: 'Visa Inc.', category: 'Stock', sector: 'Financial Services' },
+    'VOW3': { name: 'Volkswagen', category: 'Stock', sector: 'Automotive' },
+    'WHEAT': { name: 'Wheat', category: 'Commodity', sector: 'Agriculture' }
+};
+
+function getSymbolMetadata(symbol) {
+    return SYMBOL_METADATA[symbol] || { name: symbol, category: 'Unknown', sector: 'Unknown' };
+}
+
