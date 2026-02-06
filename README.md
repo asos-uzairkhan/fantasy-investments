@@ -2,7 +2,6 @@
 
 A web application for teaching kids about investing through a virtual stock portfolio game. Players start with £50 and select 10 stocks to invest in, with the ability to make optional monthly switches.
 
-## Features
 
 - **User Authentication**: Secure registration and login system
 - **Initial Stock Selection**: Players select 10 stocks (£5 each) from available options
