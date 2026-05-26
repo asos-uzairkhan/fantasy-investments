@@ -22,3 +22,6 @@ const firebaseConfig = {
   messagingSenderId: "973607070149",
   appId: "1:973607070149:web:fcc6770e8f0f5d910783ac"
 };
+
+// Expose a consistent global name expected by script.js.
+window.FIREBASE_CONFIG = firebaseConfig;
