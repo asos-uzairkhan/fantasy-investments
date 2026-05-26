@@ -17,6 +17,9 @@ let multiSymbolChartInstance = null; // Store chart instance for updates
 let monthlyPerformanceChartInstance = null;
 let currentUser = null;
 let userPortfolioChartInstance = null;
+let passwordsData = {};
+let isAdmin = false;
+let db = null; // Firebase Realtime Database reference
 
 // Initialize the application
 document.addEventListener('DOMContentLoaded', async () => {
@@ -26,8 +29,12 @@ document.addEventListener('DOMContentLoaded', async () => {
             console.warn('Running via file:// protocol. Fetch requests may be blocked by CORS policy.');
         }
 
-        // Setup Login Listeners
+        // Load passwords and wire up auth UI
+        await loadPasswords();
         setupLoginListeners();
+        setupChangePasswordModal();
+        setupAdminListeners();
+        document.getElementById('logout-btn')?.addEventListener('click', handleLogout);
 
         await discoverParticipants();
         await loadAllData();
@@ -38,13 +45,15 @@ document.addEventListener('DOMContentLoaded', async () => {
         createLineChart();
         populateRankingsTable();
         
-        // Enable login
+        // Enable login inputs
         const loginBtn = document.getElementById('login-button');
         const userInput = document.getElementById('username-input');
+        const passwordInput = document.getElementById('password-input');
         if (loginBtn && userInput) {
             loginBtn.textContent = 'Login';
             loginBtn.disabled = false;
             userInput.disabled = false;
+            if (passwordInput) passwordInput.disabled = false;
             userInput.focus();
         }
 
@@ -908,49 +917,78 @@ function createMultiSymbolChart(symbols, startDate) {
 function setupLoginListeners() {
     const loginBtn = document.getElementById('login-button');
     const userInput = document.getElementById('username-input');
+    const passwordInput = document.getElementById('password-input');
 
-    const attemptLogin = () => {
+    const attemptLogin = async () => {
         const username = userInput.value.trim();
-        if (username) handleLogin(username);
+        const password = passwordInput ? passwordInput.value : '';
+        if (!username) return;
+        if (!password) {
+            showLoginError('Please enter your password.');
+            return;
+        }
+        loginBtn.disabled = true;
+        loginBtn.textContent = 'Logging in...';
+        await handleLogin(username, password);
+        loginBtn.disabled = false;
+        loginBtn.textContent = 'Login';
     };
 
     if (loginBtn) loginBtn.addEventListener('click', attemptLogin);
     if (userInput) userInput.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') passwordInput?.focus();
+    });
+    if (passwordInput) passwordInput.addEventListener('keypress', (e) => {
         if (e.key === 'Enter') attemptLogin();
     });
 }
 
-function handleLogin(username) {
-    // Case insensitive match
-    const participant = PARTICIPANTS.find(p => p.toLowerCase() === username.toLowerCase());
-    
-    if (participant) {
-        currentUser = participant;
-        
-        // Hide login, show main
-        const loginOverlay = document.getElementById('login-overlay');
-        const mainContent = document.getElementById('main-content');
-        const footer = document.getElementById('main-footer');
-        
-        if (loginOverlay) loginOverlay.style.display = 'none';
-        if (mainContent) mainContent.style.display = 'block';
-        if (footer) footer.style.display = 'block';
-        
-        // Update Symbol Tab
-        updateSymbolsTabForUser();
-        
-        // Resize charts to fit container after becoming visible
-        setTimeout(() => {
-           window.dispatchEvent(new Event('resize')); 
-        }, 100);
-        
+async function handleLogin(username, password) {
+    const lowerUsername = username.toLowerCase();
+    const isAdminLogin = lowerUsername === 'admin';
+
+    // Check the username is valid
+    const participant = PARTICIPANTS.find(p => p.toLowerCase() === lowerUsername);
+    if (!participant && !isAdminLogin) {
+        showLoginError('User not found. Please try again.');
+        return;
+    }
+
+    // Validate password
+    const enteredHash = await hashPassword(password);
+    const storedHash = getStoredHash(username);
+    if (!storedHash || enteredHash !== storedHash) {
+        showLoginError('Incorrect password. Please try again.');
+        return;
+    }
+
+    // Successful login
+    currentUser = isAdminLogin ? 'admin' : participant;
+    isAdmin = isAdminLogin;
+
+    const loginOverlay = document.getElementById('login-overlay');
+    if (loginOverlay) loginOverlay.style.display = 'none';
+
+    const footer = document.getElementById('main-footer');
+    if (footer) footer.style.display = 'block';
+
+    if (isAdminLogin) {
+        showAdminPanel();
     } else {
-        const errorMsg = document.getElementById('login-error');
-        if (errorMsg) {
-            errorMsg.textContent = 'User not found. Please try again.';
-            // Jiggle animation or visual feedback could be added here
-            setTimeout(() => errorMsg.textContent = '', 3000);
-        }
+        const mainContent = document.getElementById('main-content');
+        if (mainContent) mainContent.style.display = 'block';
+        updateSymbolsTabForUser();
+        setTimeout(() => window.dispatchEvent(new Event('resize')), 100);
+    }
+
+    updateUserInfoBar();
+}
+
+function showLoginError(message) {
+    const errorMsg = document.getElementById('login-error');
+    if (errorMsg) {
+        errorMsg.textContent = message;
+        setTimeout(() => errorMsg.textContent = '', 3000);
     }
 }
 
@@ -1188,3 +1226,327 @@ function getSymbolMetadata(symbol) {
     return SYMBOL_METADATA[symbol] || { name: symbol, category: 'Unknown', sector: 'Unknown' };
 }
 
+// ─── Password Hashing ────────────────────────────────────────────────────────
+
+async function hashPassword(password) {
+    const encoder = new TextEncoder();
+    const data = encoder.encode(password);
+    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+    return Array.from(new Uint8Array(hashBuffer))
+        .map(b => b.toString(16).padStart(2, '0'))
+        .join('');
+}
+
+async function loadPasswords() {
+    if (typeof FIREBASE_CONFIG === 'undefined' || FIREBASE_CONFIG.apiKey === 'YOUR_API_KEY') {
+        showLoginError('⚠️ Firebase is not configured. Please fill in firebase-config.js.');
+        passwordsData = { users: {}, admin: '' };
+        return;
+    }
+
+    try {
+        if (!firebase.apps.length) {
+            firebase.initializeApp(FIREBASE_CONFIG);
+        }
+        db = firebase.database();
+
+        const snapshot = await db.ref('passwords').get();
+        if (snapshot.exists()) {
+            passwordsData = snapshot.val();
+        } else {
+            // First-time setup: seed Firebase from the local passwords.json
+            await seedFirebaseFromJson();
+        }
+    } catch (error) {
+        console.error('Firebase error:', error);
+        showLoginError('⚠️ Could not connect to database. Check your connection and firebase-config.js.');
+        passwordsData = { users: {}, admin: '' };
+    }
+}
+
+// Runs once on first deployment: pushes passwords.json into Firebase
+async function seedFirebaseFromJson() {
+    try {
+        const response = await fetch('data/passwords.json');
+        if (!response.ok) throw new Error('passwords.json not found');
+        const data = await response.json();
+        await db.ref('passwords').set(data);
+        passwordsData = data;
+        console.log('Firebase seeded from passwords.json');
+    } catch (error) {
+        console.warn('Could not seed Firebase from passwords.json:', error);
+        passwordsData = { users: {}, admin: '' };
+    }
+}
+
+// Returns the stored hash for a user from the in-memory passwordsData (loaded from Firebase).
+function getStoredHash(username) {
+    if (username.toLowerCase() === 'admin') {
+        return passwordsData.admin || '';
+    }
+    const participant = PARTICIPANTS.find(p => p.toLowerCase() === username.toLowerCase());
+    if (participant) {
+        return passwordsData.users?.[participant] || '';
+    }
+    return '';
+}
+
+// ─── User Info Bar & Logout ───────────────────────────────────────────────────
+
+function updateUserInfoBar() {
+    const bar = document.getElementById('user-info-bar');
+    const nameDisplay = document.getElementById('user-display-name');
+    if (bar) bar.style.display = 'flex';
+    if (nameDisplay) {
+        nameDisplay.textContent = `👤 ${currentUser}${isAdmin ? ' (Admin)' : ''}`;
+    }
+}
+
+function handleLogout() {
+    currentUser = null;
+    isAdmin = false;
+
+    const mainContent = document.getElementById('main-content');
+    const adminPanel = document.getElementById('admin-panel');
+    const footer = document.getElementById('main-footer');
+    const userInfoBar = document.getElementById('user-info-bar');
+
+    if (mainContent) mainContent.style.display = 'none';
+    if (adminPanel) adminPanel.style.display = 'none';
+    if (footer) footer.style.display = 'none';
+    if (userInfoBar) userInfoBar.style.display = 'none';
+
+    const loginOverlay = document.getElementById('login-overlay');
+    const passwordInput = document.getElementById('password-input');
+    const usernameInput = document.getElementById('username-input');
+    if (loginOverlay) loginOverlay.style.display = 'flex';
+    if (passwordInput) passwordInput.value = '';
+    if (usernameInput) {
+        usernameInput.value = '';
+        usernameInput.focus();
+    }
+}
+
+// ─── Change Password Modal ────────────────────────────────────────────────────
+
+function setupChangePasswordModal() {
+    const modal = document.getElementById('change-password-modal');
+    const changeBtn = document.getElementById('change-password-btn');
+    const cancelBtn = document.getElementById('change-password-cancel');
+    const confirmBtn = document.getElementById('change-password-confirm');
+
+    if (changeBtn) changeBtn.addEventListener('click', () => {
+        if (modal) modal.style.display = 'flex';
+        document.getElementById('current-password-input')?.focus();
+    });
+
+    if (cancelBtn) cancelBtn.addEventListener('click', closeChangePasswordModal);
+    if (confirmBtn) confirmBtn.addEventListener('click', attemptChangePassword);
+
+    if (modal) modal.addEventListener('click', (e) => {
+        if (e.target === modal) closeChangePasswordModal();
+    });
+
+    document.getElementById('confirm-password-input')?.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') attemptChangePassword();
+    });
+}
+
+function closeChangePasswordModal() {
+    const modal = document.getElementById('change-password-modal');
+    if (modal) modal.style.display = 'none';
+    ['current-password-input', 'new-password-input', 'confirm-password-input'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.value = '';
+    });
+    const errorEl = document.getElementById('change-password-error');
+    const successEl = document.getElementById('change-password-success');
+    if (errorEl) errorEl.textContent = '';
+    if (successEl) successEl.textContent = '';
+}
+
+async function attemptChangePassword() {
+    const currentPw = document.getElementById('current-password-input')?.value || '';
+    const newPw = document.getElementById('new-password-input')?.value || '';
+    const confirmPw = document.getElementById('confirm-password-input')?.value || '';
+    const errorEl = document.getElementById('change-password-error');
+    const successEl = document.getElementById('change-password-success');
+
+    if (errorEl) errorEl.textContent = '';
+    if (successEl) successEl.textContent = '';
+
+    if (!currentPw || !newPw || !confirmPw) {
+        if (errorEl) errorEl.textContent = 'All fields are required.';
+        return;
+    }
+    if (newPw !== confirmPw) {
+        if (errorEl) errorEl.textContent = 'New passwords do not match.';
+        return;
+    }
+    if (newPw.length < 4) {
+        if (errorEl) errorEl.textContent = 'New password must be at least 4 characters.';
+        return;
+    }
+
+    const currentHash = await hashPassword(currentPw);
+    const storedHash = getStoredHash(currentUser);
+    if (currentHash !== storedHash) {
+        if (errorEl) errorEl.textContent = 'Current password is incorrect.';
+        return;
+    }
+
+    const newHash = await hashPassword(newPw);
+
+    try {
+        const path = currentUser.toLowerCase() === 'admin'
+            ? 'passwords/admin'
+            : `passwords/users/${currentUser}`;
+        await db.ref(path).set(newHash);
+        // Update local cache
+        if (currentUser.toLowerCase() === 'admin') {
+            passwordsData.admin = newHash;
+        } else {
+            if (!passwordsData.users) passwordsData.users = {};
+            passwordsData.users[currentUser] = newHash;
+        }
+    } catch (error) {
+        if (errorEl) errorEl.textContent = '❌ Failed to save. Check your connection and try again.';
+        return;
+    }
+
+    if (successEl) successEl.textContent = '✅ Password changed successfully!';
+    setTimeout(closeChangePasswordModal, 2000);
+}
+
+// ─── Admin Panel ──────────────────────────────────────────────────────────────
+
+function showAdminPanel() {
+    const adminPanel = document.getElementById('admin-panel');
+    if (adminPanel) adminPanel.style.display = 'block';
+    renderAdminUsersTable();
+}
+
+async function renderAdminUsersTable() {
+    const tbody = document.getElementById('admin-users-body');
+    if (!tbody) return;
+
+    tbody.innerHTML = '<tr><td colspan="3" style="color:#999;padding:1rem;">Loading...</td></tr>';
+
+    const rows = await Promise.all(PARTICIPANTS.map(async name => {
+        const defaultHash = await hashPassword(name.toLowerCase());
+        const storedHash = passwordsData.users?.[name] || '';
+        const isCustom = storedHash && storedHash !== defaultHash;
+        return { name, isCustom };
+    }));
+
+    tbody.innerHTML = '';
+    rows.forEach(({ name, isCustom }) => {
+        const row = document.createElement('tr');
+        row.innerHTML = `
+            <td>${name}</td>
+            <td><span class="${isCustom ? 'custom-pw' : 'default-pw'}">${isCustom ? '🔑 Custom password' : '🔓 Default (username)'}</span></td>
+            <td>
+                <button class="admin-reset-btn" onclick="adminResetPassword('${name}')">Reset to Default</button>
+                <button class="admin-set-btn" onclick="adminSetPassword('${name}')">Set Password</button>
+            </td>
+        `;
+        tbody.appendChild(row);
+    });
+}
+
+async function adminResetPassword(username) {
+    const defaultHash = await hashPassword(username.toLowerCase());
+    try {
+        await db.ref(`passwords/users/${username}`).set(defaultHash);
+        if (!passwordsData.users) passwordsData.users = {};
+        passwordsData.users[username] = defaultHash;
+        renderAdminUsersTable();
+        showAdminMessage(`✅ ${username}'s password has been reset to default (their username in lowercase).`);
+    } catch (error) {
+        showAdminMessage(`❌ Failed to reset ${username}'s password. Check your connection.`);
+    }
+}
+
+function adminSetPassword(username) {
+    const modal = document.getElementById('admin-set-password-modal');
+    const usernameEl = document.getElementById('admin-reset-username');
+    if (usernameEl) usernameEl.textContent = username;
+    if (modal) {
+        modal.style.display = 'flex';
+        modal.dataset.targetUser = username;
+    }
+    document.getElementById('admin-new-password')?.focus();
+}
+
+function closeAdminSetPasswordModal() {
+    const modal = document.getElementById('admin-set-password-modal');
+    if (modal) {
+        modal.style.display = 'none';
+        modal.dataset.targetUser = '';
+    }
+    ['admin-new-password', 'admin-confirm-password'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.value = '';
+    });
+    const errorEl = document.getElementById('admin-set-password-error');
+    if (errorEl) errorEl.textContent = '';
+}
+
+async function confirmAdminSetPassword() {
+    const modal = document.getElementById('admin-set-password-modal');
+    const targetUser = modal?.dataset.targetUser;
+    const newPw = document.getElementById('admin-new-password')?.value || '';
+    const confirmPw = document.getElementById('admin-confirm-password')?.value || '';
+    const errorEl = document.getElementById('admin-set-password-error');
+
+    if (errorEl) errorEl.textContent = '';
+
+    if (!newPw || !confirmPw) {
+        if (errorEl) errorEl.textContent = 'Both fields are required.';
+        return;
+    }
+    if (newPw !== confirmPw) {
+        if (errorEl) errorEl.textContent = 'Passwords do not match.';
+        return;
+    }
+    if (newPw.length < 4) {
+        if (errorEl) errorEl.textContent = 'Password must be at least 4 characters.';
+        return;
+    }
+
+    const hash = await hashPassword(newPw);
+    try {
+        await db.ref(`passwords/users/${targetUser}`).set(hash);
+        if (!passwordsData.users) passwordsData.users = {};
+        passwordsData.users[targetUser] = hash;
+    } catch (error) {
+        if (errorEl) errorEl.textContent = '❌ Failed to save. Check your connection and try again.';
+        return;
+    }
+
+    closeAdminSetPasswordModal();
+    renderAdminUsersTable();
+    showAdminMessage(`✅ ${targetUser}'s password has been updated successfully.`);
+}
+
+function showAdminMessage(message) {
+    const msgEl = document.getElementById('admin-message');
+    if (msgEl) {
+        msgEl.textContent = message;
+        setTimeout(() => { if (msgEl) msgEl.textContent = ''; }, 5000);
+    }
+}
+
+function setupAdminListeners() {
+    document.getElementById('admin-set-cancel')?.addEventListener('click', closeAdminSetPasswordModal);
+    document.getElementById('admin-set-confirm')?.addEventListener('click', confirmAdminSetPassword);
+
+    const modal = document.getElementById('admin-set-password-modal');
+    if (modal) modal.addEventListener('click', (e) => {
+        if (e.target === modal) closeAdminSetPasswordModal();
+    });
+
+    document.getElementById('admin-confirm-password')?.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') confirmAdminSetPassword();
+    });
+}

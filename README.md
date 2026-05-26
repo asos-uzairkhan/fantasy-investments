@@ -2,6 +2,58 @@
 
 A fun investment competition website for kids to learn about stocks, crypto, and commodities while competing to beat the S&P 500!
 
+## 🔐 Authentication
+
+The site requires a username and password to log in. Passwords are stored securely (SHA-256 hashed) in **Firebase Realtime Database**, so they work across all devices and locations worldwide.
+
+### Default Passwords
+Each participant's default password is their **username in lowercase** (e.g. `alpha` for Alpha, `bravo` for Bravo). The admin default password is `admin123`.
+
+### Admin Account
+Log in with username `admin` to access the admin panel. From there you can:
+- **Reset to Default** — reverts the user to their lowercase-username default
+- **Set Password** — assign a specific new password for any participant
+
+Changes take effect immediately on all devices.
+
+### Changing Your Password
+Once logged in, click **🔑 Change Password** in the header bar. Enter your current password and choose a new one (minimum 4 characters).
+
+### Forgotten Password (Admin Reset)
+Log in as `admin` → find the user in the table → click **Reset to Default** or **Set Password**.
+
+---
+
+## 🔥 Firebase Setup (Required for first deployment)
+
+The site uses [Firebase Realtime Database](https://firebase.google.com) to store password hashes in the cloud.
+
+### Step 1 — Create a Firebase Project
+1. Go to [https://console.firebase.google.com](https://console.firebase.google.com)
+2. Click **Add project**, follow the prompts
+3. In the left sidebar: **Build → Realtime Database → Create Database**
+4. Choose a region and start in **test mode** (you'll update the rules next)
+
+### Step 2 — Get your Web Config
+1. In Firebase Console: **Project Settings (⚙️) → Your apps → </> Add app**
+2. Register the app, then copy the `firebaseConfig` values
+3. Open `firebase-config.js` and fill in all the placeholder values
+
+### Step 3 — Set Security Rules
+1. In Firebase Console: **Realtime Database → Rules**
+2. Replace the rules with the contents of `firebase-rules.json` (in this repo)
+3. Click **Publish**
+
+### Step 4 — Deploy
+Push the repo to GitHub Pages as normal. On the first page load with Firebase configured, the site will automatically seed your Firebase database from `data/passwords.json`.
+
+### Adding New Participants
+After adding a new `.csv` to `data/investments/`, run:
+```bash
+uv run python scripts/generate_passwords.py
+```
+Then manually add the new user's entry in Firebase Console (**Realtime Database → passwords → users**), or delete the entire `passwords` node so the site re-seeds from the updated `passwords.json` on next load.
+
 ## 🌐 Hosting on GitHub Pages
 
 1. Create a new repository on GitHub (e.g., `fantasy-investments-2026`)
