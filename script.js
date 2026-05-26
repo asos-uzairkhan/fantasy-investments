@@ -1238,7 +1238,9 @@ async function hashPassword(password) {
 }
 
 async function loadPasswords() {
-    if (typeof FIREBASE_CONFIG === 'undefined' || FIREBASE_CONFIG.apiKey === 'YOUR_API_KEY') {
+    const cfg = window.FIREBASE_CONFIG || window.firebaseConfig;
+
+    if (!cfg || cfg.apiKey === 'YOUR_API_KEY') {
         showLoginError('⚠️ Firebase is not configured. Please fill in firebase-config.js.');
         passwordsData = { users: {}, admin: '' };
         return;
@@ -1246,13 +1248,22 @@ async function loadPasswords() {
 
     try {
         if (!firebase.apps.length) {
-            firebase.initializeApp(FIREBASE_CONFIG);
+            firebase.initializeApp(cfg);
         }
         db = firebase.database();
 
         const snapshot = await db.ref('passwords').get();
         if (snapshot.exists()) {
-            passwordsData = snapshot.val();
+            const remote = snapshot.val() || {};
+            passwordsData = {
+                users: remote.users || {},
+                admin: remote.admin || ''
+            };
+
+            // Repair partially populated data (for example when initial seed failed).
+            if (!passwordsData.admin || Object.keys(passwordsData.users).length === 0) {
+                await seedFirebaseFromJson();
+            }
         } else {
             // First-time setup: seed Firebase from the local passwords.json
             await seedFirebaseFromJson();
@@ -1270,11 +1281,31 @@ async function seedFirebaseFromJson() {
         const response = await fetch('data/passwords.json');
         if (!response.ok) throw new Error('passwords.json not found');
         const data = await response.json();
-        await db.ref('passwords').set(data);
-        passwordsData = data;
-        console.log('Firebase seeded from passwords.json');
+        // Set local data first so login works even if the Firebase write fails
+        passwordsData = {
+            users: data.users || {},
+            admin: data.admin || ''
+        };
+        try {
+            // Rules currently allow writes to /passwords/users/$user and /passwords/admin,
+            // but not a full write to /passwords in one operation.
+            const writes = [];
+
+            if (passwordsData.admin) {
+                writes.push(db.ref('passwords/admin').set(passwordsData.admin));
+            }
+
+            Object.entries(passwordsData.users).forEach(([username, hash]) => {
+                writes.push(db.ref(`passwords/users/${username}`).set(hash));
+            });
+
+            await Promise.all(writes);
+            console.log('Firebase seeded from passwords.json');
+        } catch (writeError) {
+            console.warn('Could not write passwords to Firebase, using local passwords.json:', writeError);
+        }
     } catch (error) {
-        console.warn('Could not seed Firebase from passwords.json:', error);
+        console.warn('Could not load passwords.json:', error);
         passwordsData = { users: {}, admin: '' };
     }
 }
@@ -1284,10 +1315,20 @@ function getStoredHash(username) {
     if (username.toLowerCase() === 'admin') {
         return passwordsData.admin || '';
     }
+
+    // Primary lookup: participant name discovered from investments files.
     const participant = PARTICIPANTS.find(p => p.toLowerCase() === username.toLowerCase());
-    if (participant) {
-        return passwordsData.users?.[participant] || '';
+    if (participant && passwordsData.users?.[participant]) {
+        return passwordsData.users[participant];
     }
+
+    // Fallback lookup: case-insensitive scan of Firebase user keys.
+    const users = passwordsData.users || {};
+    const matchedKey = Object.keys(users).find(key => key.toLowerCase() === username.toLowerCase());
+    if (matchedKey) {
+        return users[matchedKey] || '';
+    }
+
     return '';
 }
 
