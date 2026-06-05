@@ -7,6 +7,10 @@
     <link rel="stylesheet" href="styles.css">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0"></script>
+    <!-- Firebase SDKs -->
+    <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-database-compat.js"></script>
+    <script src="firebase-config.js"></script>
 </head>
 <body>
     <header>
@@ -14,17 +18,70 @@
             <h1>🏆 Fantasy Investments 2026</h1>
             <p class="subtitle">Kids Investment Competition - Can you beat the S&P 500?</p>
         </div>
+        <div id="user-info-bar" class="user-info-bar" style="display: none;">
+            <span id="user-display-name">👤 </span>
+            <div class="user-actions">
+                <button id="change-password-btn" class="user-action-btn">🔑 Change Password</button>
+                <button id="logout-btn" class="user-action-btn logout-btn">🚪 Logout</button>
+            </div>
+        </div>
     </header>
 
     <div id="login-overlay" class="login-overlay">
         <div class="login-box">
             <h2>🔐 Login to Fantasy Investments</h2>
-            <p>Please enter your codename to continue.</p>
-            <div class="input-group">
-                <input type="text" id="username-input" placeholder="Username" autocomplete="off" disabled>
+            <p>Enter your username and password to continue.</p>
+            <div class="login-fields">
+                <input type="text" id="username-input" placeholder="Username" autocomplete="username" disabled>
+                <input type="password" id="password-input" placeholder="Password" autocomplete="current-password" disabled>
                 <button id="login-button" disabled>Loading...</button>
             </div>
             <p id="login-error" class="error-message"></p>
+        </div>
+    </div>
+
+    <!-- Change Password Modal -->
+    <div id="change-password-modal" class="modal-overlay" style="display: none;">
+        <div class="modal-box">
+            <h2>🔑 Change Password</h2>
+            <div class="modal-input-group">
+                <label for="current-password-input">Current Password</label>
+                <input type="password" id="current-password-input" placeholder="Current password">
+            </div>
+            <div class="modal-input-group">
+                <label for="new-password-input">New Password</label>
+                <input type="password" id="new-password-input" placeholder="New password (min. 4 characters)">
+            </div>
+            <div class="modal-input-group">
+                <label for="confirm-password-input">Confirm New Password</label>
+                <input type="password" id="confirm-password-input" placeholder="Confirm new password">
+            </div>
+            <p id="change-password-error" class="error-message"></p>
+            <p id="change-password-success" class="success-message"></p>
+            <div class="modal-buttons">
+                <button id="change-password-confirm" class="btn-primary">Change Password</button>
+                <button id="change-password-cancel" class="btn-secondary">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Admin Set Password Modal -->
+    <div id="admin-set-password-modal" class="modal-overlay" style="display: none;">
+        <div class="modal-box">
+            <h2>🔑 Set Password for <span id="admin-reset-username"></span></h2>
+            <div class="modal-input-group">
+                <label for="admin-new-password">New Password</label>
+                <input type="password" id="admin-new-password" placeholder="New password (min. 4 characters)">
+            </div>
+            <div class="modal-input-group">
+                <label for="admin-confirm-password">Confirm Password</label>
+                <input type="password" id="admin-confirm-password" placeholder="Confirm password">
+            </div>
+            <p id="admin-set-password-error" class="error-message"></p>
+            <div class="modal-buttons">
+                <button id="admin-set-confirm" class="btn-primary">Set Password</button>
+                <button id="admin-set-cancel" class="btn-secondary">Cancel</button>
+            </div>
         </div>
     </div>
 
@@ -173,6 +230,30 @@
     <footer id="main-footer" style="display: none;">
         <p>Fantasy Investments 2026 | Data updated monthly | Good luck everyone! 🍀</p>
     </footer>
+
+    <!-- Admin Panel (shown only to admin user) -->
+    <div id="admin-panel" style="display: none;">
+        <div class="admin-main-content">
+            <section class="admin-section">
+                <h2>🔧 Admin Panel</h2>
+                <p class="chart-description">Manage participant passwords. The default password for each user is their username in lowercase (e.g. <strong>alpha</strong> for Alpha). Password changes are stored in the cloud and apply to all devices.</p>
+                <p id="admin-message" class="admin-message"></p>
+                <div class="rankings-table-container">
+                    <table class="admin-users-table">
+                        <thead>
+                            <tr>
+                                <th>Participant</th>
+                                <th>Password Status</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="admin-users-body">
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+        </div>
+    </div>
 
     <script src="script.js"></script>
 </body>

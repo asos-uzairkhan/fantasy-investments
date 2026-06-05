@@ -1,0 +1,16 @@
+{
+  "_comment": "Paste these rules into: Firebase Console → Realtime Database → Rules",
+  "rules": {
+    "passwords": {
+      ".read": true,
+      "users": {
+        "$user": {
+          ".write": true
+        }
+      },
+      "admin": {
+        ".write": true
+      }
+    }
+  }
+}
