@@ -27,6 +27,19 @@
         </div>
     </header>
 
+    <!-- Refresh overlay: shown when the first login of the day triggers a data refresh -->
+    <div id="refresh-overlay" class="login-overlay" style="display: none;">
+        <div class="login-box">
+            <h2>⏳ Updating Market Data</h2>
+            <div id="refresh-spinner" class="refresh-spinner"></div>
+            <p id="refresh-message">Refreshing market data...</p>
+            <div style="margin-top: 1.2rem; display: flex; gap: 0.75rem; justify-content: center; flex-wrap: wrap;">
+                <button id="refresh-retry-btn" style="display:none" onclick="retryRefresh()">🔄 Retry</button>
+                <button id="refresh-skip-btn" style="display:none" onclick="skipRefresh()">Continue with existing data</button>
+            </div>
+        </div>
+    </div>
+
     <div id="login-overlay" class="login-overlay">
         <div class="login-box">
             <h2>🔐 Login to Fantasy Investments</h2>

@@ -465,6 +465,52 @@ footer {
     z-index: 1000;
 }
 
+.refresh-spinner {
+    width: 48px;
+    height: 48px;
+    border: 5px solid #e0e0e0;
+    border-top-color: var(--secondary-color);
+    border-radius: 50%;
+    animation: spin 0.9s linear infinite;
+    margin: 0 auto 1rem;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+#refresh-message {
+    color: #555;
+    min-height: 1.4rem;
+    font-size: 0.95rem;
+}
+
+#refresh-retry-btn,
+#refresh-skip-btn {
+    padding: 0.5rem 1.1rem;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.9rem;
+    font-weight: 600;
+    transition: opacity 0.2s;
+}
+
+#refresh-retry-btn {
+    background: var(--secondary-color);
+    color: white;
+}
+
+#refresh-skip-btn {
+    background: #e0e0e0;
+    color: #444;
+}
+
+#refresh-retry-btn:hover,
+#refresh-skip-btn:hover {
+    opacity: 0.85;
+}
+
 .login-box {
     background: white;
     padding: 2.5rem;

@@ -11,6 +11,14 @@
       "admin": {
         ".write": true
       }
+    },
+    "symbols": {
+      ".read": true,
+      ".write": true
+    },
+    "meta": {
+      ".read": true,
+      ".write": true
     }
   }
 }

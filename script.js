@@ -15,11 +15,50 @@ let PARTICIPANTS = []; // Will be populated dynamically from investments folder
 let singleSymbolChartInstance = null; // Store chart instance for updates
 let multiSymbolChartInstance = null; // Store chart instance for updates
 let monthlyPerformanceChartInstance = null;
+let tornadoChartInstance = null;
+let lineChartInstance = null;
 let currentUser = null;
 let userPortfolioChartInstance = null;
 let passwordsData = {};
 let isAdmin = false;
 let db = null; // Firebase Realtime Database reference
+let pendingRefreshResolve = null; // Resolves the refresh promise on skip/complete
+
+// Maps internal symbol names to Yahoo Finance tickers (only those that differ)
+const YAHOO_TICKER_MAP = {
+    'SPX':       '^GSPC',
+    'BTC':       'BTC-GBP',
+    'DOGE':      'DOGE-GBP',
+    'ETH':       'ETH-GBP',
+    'SHIB':      'SHIB-GBP',
+    'SOL':       'SOL-GBP',
+    'USDT':      'USDT-USD',
+    'GOLD':      'GC=F',
+    'SILVER':    'SI=F',
+    'OIL':       'CL=F',
+    'COPPER':    'HG=F',
+    'WHEAT':     'ZW=F',
+    'ALUMINIUM': 'ALI=F',
+    'SAMSUNG':   '005930.KS',
+    'ARAMCO':    '2222.SR',
+    'AZN':       'AZN.L',
+    'GSK':       'GSK.L',
+    'BP':        'BP.L',
+    'BRK':       'BRK-B',
+    'ROG':       'ROG.SW',
+    'HIWS':      'HIWS.L',
+    'NOVN':      'NOVN.SW',
+    'CJ6':       'CJ6.F',
+    'SSW':       'SSW.JO',
+    'VOW3':      'VOW3.DE',
+    'ISWD':      'ISWDL.XC',
+};
+
+// Unix timestamp for 2026-01-01 00:00:00 UTC (refresh always starts from here)
+const REFRESH_START_UNIX = 1767225600;
+
+// Lock is considered abandoned after this many ms with no lastRefresh update
+const REFRESH_STALE_MS = 2 * 60 * 1000;
 
 // Initialize the application
 document.addEventListener('DOMContentLoaded', async () => {
@@ -38,7 +77,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         await discoverParticipants();
         await loadAllData();
-        await loadSymbolPrices();
+        await loadSymbolPricesFromFirebase();
         calculatePortfolioValues();
         updateStatsOverview();
         createTornadoChart();
@@ -160,15 +199,6 @@ function parseCSVLine(line) {
 
 // Load all CSV data
 async function loadAllData() {
-    // Load S&P 500 data
-    try {
-        const sp500Text = await fetchCSV('data/symbols/SPX.csv');
-        sp500Data = parseCSV(sp500Text);
-    } catch (e) {
-        console.warn('Could not load S&P 500 data', e);
-        sp500Data = [];
-    }
-    
     // Load individual participant investment files
     const promises = PARTICIPANTS.map(async participant => {
         try {
@@ -220,6 +250,29 @@ async function loadSymbolPrices() {
     });
     
     await Promise.all(promises);
+}
+
+// Load all symbol prices from Firebase Realtime Database
+async function loadSymbolPricesFromFirebase() {
+    if (!db) {
+        console.warn('Firebase not available; symbol prices will be empty.');
+        return;
+    }
+    try {
+        const snapshot = await db.ref('symbols').get();
+        if (snapshot.exists()) {
+            const rawData = snapshot.val();
+            Object.entries(rawData).forEach(([symbol, symData]) => {
+                const prices = (symData && symData.prices) ? symData.prices : {};
+                symbolPricesData[symbol] = Object.entries(prices)
+                    .map(([date, value]) => ({ date, value }))
+                    .sort((a, b) => a.date.localeCompare(b.date));
+            });
+        }
+        sp500Data = symbolPricesData['SPX'] || [];
+    } catch (error) {
+        console.warn('Could not load symbol prices from Firebase:', error);
+    }
 }
 
 // Get all unique dates from symbol price data
@@ -451,13 +504,18 @@ function createTornadoChart() {
     const canvas = document.getElementById('tornadoChart');
     if (!canvas) return;
     
+    if (tornadoChartInstance) {
+        tornadoChartInstance.destroy();
+        tornadoChartInstance = null;
+    }
+
     const ctx = canvas.getContext('2d');
     const rankings = calculateRankings();
     
     // Sort by return for the chart
     rankings.sort((a, b) => b.return - a.return);
     
-    new Chart(ctx, {
+    tornadoChartInstance = new Chart(ctx, {
         type: 'bar',
         data: {
             labels: rankings.map(r => r.name),
@@ -514,6 +572,11 @@ function createLineChart() {
     const canvas = document.getElementById('lineChart');
     if (!canvas) return;
     
+    if (lineChartInstance) {
+        lineChartInstance.destroy();
+        lineChartInstance = null;
+    }
+
     const ctx = canvas.getContext('2d');
     const participants = getParticipants();
     const allDates = getAllDates();
@@ -558,7 +621,7 @@ function createLineChart() {
         });
     }
     
-    new Chart(ctx, {
+    lineChartInstance = new Chart(ctx, {
         type: 'line',
         data: {
             labels: allDates, // Dates are already sorted strings YYYY-MM-DD
@@ -660,6 +723,7 @@ function populateSymbolSelectors() {
     const multiSelect = document.getElementById('multi-symbol-select');
     
     if (singleSelect) {
+        singleSelect.innerHTML = '<option value="">-- Choose a symbol --</option>';
         symbols.forEach(symbol => {
             const option = document.createElement('option');
             option.value = symbol;
@@ -669,6 +733,7 @@ function populateSymbolSelectors() {
     }
     
     if (multiSelect) {
+        multiSelect.innerHTML = '';
         symbols.forEach(symbol => {
             const option = document.createElement('option');
             option.value = symbol;
@@ -683,6 +748,7 @@ function populateDateSelector() {
     const dateSelect = document.getElementById('start-date-select');
     
     if (dateSelect && dates.length > 0) {
+        dateSelect.innerHTML = '';
         dates.forEach(date => {
             const option = document.createElement('option');
             option.value = date;
@@ -966,8 +1032,12 @@ async function handleLogin(username, password) {
     currentUser = isAdminLogin ? 'admin' : participant;
     isAdmin = isAdminLogin;
 
+    // Hide login overlay before potentially showing the refresh overlay
     const loginOverlay = document.getElementById('login-overlay');
     if (loginOverlay) loginOverlay.style.display = 'none';
+
+    // Check whether symbol data needs a daily refresh before showing the app
+    await checkAndTriggerRefresh();
 
     const footer = document.getElementById('main-footer');
     if (footer) footer.style.display = 'block';
@@ -1589,5 +1659,258 @@ function setupAdminListeners() {
 
     document.getElementById('admin-confirm-password')?.addEventListener('keypress', (e) => {
         if (e.key === 'Enter') confirmAdminSetPassword();
+    });
+}
+
+// ─── Daily Symbol Data Refresh ────────────────────────────────────────────────
+
+function getYesterdayDate() {
+    const d = new Date();
+    d.setDate(d.getDate() - 1);
+    return d.toISOString().split('T')[0];
+}
+
+function showRefreshOverlay(message) {
+    const overlay = document.getElementById('refresh-overlay');
+    const msg = document.getElementById('refresh-message');
+    const spinner = document.getElementById('refresh-spinner');
+    const retryBtn = document.getElementById('refresh-retry-btn');
+    const skipBtn = document.getElementById('refresh-skip-btn');
+    if (overlay) overlay.style.display = 'flex';
+    if (msg) msg.textContent = message || 'Refreshing market data...';
+    if (spinner) spinner.style.display = 'block';
+    if (retryBtn) retryBtn.style.display = 'none';
+    if (skipBtn) skipBtn.style.display = 'none';
+}
+
+function updateRefreshProgress(symbol, current, total) {
+    const msg = document.getElementById('refresh-message');
+    if (!msg) return;
+    if (total > 0) {
+        msg.textContent = `Updating ${symbol}... (${current} / ${total})`;
+    } else {
+        msg.textContent = symbol;
+    }
+}
+
+function hideRefreshOverlay() {
+    const overlay = document.getElementById('refresh-overlay');
+    if (overlay) overlay.style.display = 'none';
+}
+
+function showRefreshError(message) {
+    const msg = document.getElementById('refresh-message');
+    const spinner = document.getElementById('refresh-spinner');
+    const retryBtn = document.getElementById('refresh-retry-btn');
+    const skipBtn = document.getElementById('refresh-skip-btn');
+    if (msg) msg.textContent = message;
+    if (spinner) spinner.style.display = 'none';
+    if (retryBtn) retryBtn.style.display = 'inline-block';
+    if (skipBtn) skipBtn.style.display = 'inline-block';
+}
+
+// Called by the "Continue with existing data" button in the refresh overlay
+function skipRefresh() {
+    hideRefreshOverlay();
+    if (pendingRefreshResolve) {
+        pendingRefreshResolve();
+        pendingRefreshResolve = null;
+    }
+}
+
+// Called by the "Retry" button in the refresh overlay
+async function retryRefresh() {
+    showRefreshOverlay('Retrying...');
+    try {
+        const yesterday = getYesterdayDate();
+        await refreshSymbolData(yesterday);
+        await loadSymbolPricesFromFirebase();
+        calculatePortfolioValues();
+        updateStatsOverview();
+        createTornadoChart();
+        createLineChart();
+        populateRankingsTable();
+        populateSymbolSelectors();
+        populateDateSelector();
+        hideRefreshOverlay();
+        if (pendingRefreshResolve) {
+            pendingRefreshResolve();
+            pendingRefreshResolve = null;
+        }
+    } catch (error) {
+        console.error('Retry failed:', error);
+        showRefreshError('Retry failed. You can try again or continue with existing data.');
+    }
+}
+
+// Waits until meta/lastRefresh equals expectedDate OR the in-progress lock goes stale.
+// Returns 'done' (another tab finished) or 'stale' (refresher abandoned — caller should take over).
+function waitForRefreshOrStaleLock(expectedDate) {
+    return new Promise((resolve) => {
+        let metaListener = null;
+
+        // Absolute safety timeout — treat as stale so this tab takes over
+        const absoluteTimeout = setTimeout(() => {
+            db.ref('meta').off('value', metaListener);
+            resolve('stale');
+        }, 3 * 60 * 1000);
+
+        metaListener = (snapshot) => {
+            const meta = snapshot.val() || {};
+            if (meta.lastRefresh === expectedDate) {
+                clearTimeout(absoluteTimeout);
+                db.ref('meta').off('value', metaListener);
+                resolve('done');
+            } else if (meta.refreshInProgress && (Date.now() - (meta.refreshStartedAt || 0)) > REFRESH_STALE_MS) {
+                // The refresher that acquired the lock has gone away
+                clearTimeout(absoluteTimeout);
+                db.ref('meta').off('value', metaListener);
+                resolve('stale');
+            }
+        };
+
+        db.ref('meta').on('value', metaListener);
+    });
+}
+
+// Checks meta/lastRefresh and triggers a full refresh if data is stale.
+// Returns a Promise that resolves when the refresh is complete or skipped.
+async function checkAndTriggerRefresh() {
+    if (!db) return;
+    const yesterday = getYesterdayDate();
+
+    let meta = {};
+    try {
+        const snap = await db.ref('meta').get();
+        meta = snap.val() || {};
+    } catch (e) {
+        return; // Firebase unavailable — proceed without refresh
+    }
+
+    if ((meta.lastRefresh || '') === yesterday) return; // Data is current
+
+    return new Promise(async (resolve) => {
+        pendingRefreshResolve = resolve;
+
+        const refreshInProgress = meta.refreshInProgress === true;
+        const lockIsStale = (Date.now() - (meta.refreshStartedAt || 0)) > REFRESH_STALE_MS;
+
+        try {
+            if (!refreshInProgress || lockIsStale) {
+                // This login drives the refresh
+                showRefreshOverlay('Refreshing market data...');
+                await refreshSymbolData(yesterday);
+            } else {
+                // Another tab is already refreshing — wait, but watch for abandonment
+                showRefreshOverlay('Waiting for data refresh to complete...');
+                const waitResult = await waitForRefreshOrStaleLock(yesterday);
+                if (waitResult === 'stale') {
+                    // Lock went stale. Use a transaction so only ONE of the waiting
+                    // tabs claims it — the others will go back to waiting.
+                    const claimed = await new Promise((res) => {
+                        db.ref('meta').transaction((current) => {
+                            if (!current) return current;
+                            const age = Date.now() - (current.refreshStartedAt || 0);
+                            if (current.refreshInProgress && age > REFRESH_STALE_MS) {
+                                // Still stale — claim it
+                                current.refreshStartedAt = Date.now();
+                                return current;
+                            }
+                            return; // abort — someone else already claimed it or it finished
+                        }, (error, committed) => res(!error && committed));
+                    });
+
+                    if (claimed) {
+                        updateRefreshProgress('Previous refresh stalled, taking over...', 0, 0);
+                        await refreshSymbolData(yesterday);
+                    } else {
+                        // Lost the race — another tab claimed the lock; go back to waiting
+                        showRefreshOverlay('Waiting for data refresh to complete...');
+                        await waitForRefreshOrStaleLock(yesterday);
+                    }
+                }
+                // if 'done', data is already written — fall through to load it
+            }
+
+            updateRefreshProgress('Loading updated data...', 0, 0);
+            await loadSymbolPricesFromFirebase();
+            calculatePortfolioValues();
+            updateStatsOverview();
+            createTornadoChart();
+            createLineChart();
+            populateRankingsTable();
+            populateSymbolSelectors();
+            populateDateSelector();
+            hideRefreshOverlay();
+            pendingRefreshResolve = null;
+            resolve();
+        } catch (error) {
+            console.error('Refresh failed:', error);
+            showRefreshError('Failed to refresh market data. You can retry or continue with existing data.');
+            // resolve() is called by skipRefresh() or retryRefresh() via button
+        }
+    });
+}
+
+// Fetches all 61 symbols from Yahoo Finance and writes prices to Firebase.
+// Sets meta/lastRefresh as the very last step.
+async function refreshSymbolData(yesterday) {
+    const symbols = Object.keys(SYMBOL_METADATA);
+    const total = symbols.length;
+
+    const todayMidnight = new Date();
+    todayMidnight.setUTCHours(0, 0, 0, 0);
+    const period2 = Math.floor(todayMidnight.getTime() / 1000);
+
+    // Acquire the refresh lock
+    await db.ref('meta').update({
+        refreshInProgress: true,
+        refreshStartedAt: Date.now(),
+    });
+
+    for (let i = 0; i < symbols.length; i++) {
+        const symbol = symbols[i];
+        const ticker = YAHOO_TICKER_MAP[symbol] || symbol;
+        updateRefreshProgress(symbol, i + 1, total);
+
+        try {
+            const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}` +
+                        `?interval=1d&period1=${REFRESH_START_UNIX}&period2=${period2}`;
+            const resp = await fetch(url);
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+
+            const json = await resp.json();
+            const result = json?.chart?.result?.[0];
+
+            if (result) {
+                const timestamps = result.timestamp || [];
+                const closes = result.indicators?.adjclose?.[0]?.adjclose
+                             || result.indicators?.quote?.[0]?.close
+                             || [];
+
+                const prices = {};
+                timestamps.forEach((ts, idx) => {
+                    const val = closes[idx];
+                    if (val !== null && val !== undefined && !isNaN(val)) {
+                        prices[new Date(ts * 1000).toISOString().split('T')[0]] = val;
+                    }
+                });
+
+                if (Object.keys(prices).length > 0) {
+                    await db.ref(`symbols/${symbol}/prices`).set(prices);
+                }
+            }
+        } catch (err) {
+            console.warn(`Failed to refresh ${symbol} (${ticker}):`, err);
+        }
+
+        // Small delay between requests to avoid rate-limiting
+        await new Promise(r => setTimeout(r, 200));
+    }
+
+    // Update lastRefresh last — this is the signal that the refresh is complete
+    await db.ref('meta').update({
+        lastRefresh: yesterday,
+        refreshInProgress: false,
     });
 }
