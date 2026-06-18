@@ -16,6 +16,10 @@
       ".read": true,
       ".write": true
     },
+    "investments": {
+      ".read": true,
+      ".write": true
+    },
     "meta": {
       ".read": true,
       ".write": true

@@ -113,9 +113,24 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 });
 
-// Discover participants by checking which investment files exist
+// Discover participants from Firebase investments node, with CSV fallback
 async function discoverParticipants() {
-    // List of candidate names to try (alphabetically ordered)
+    PARTICIPANTS = [];
+
+    if (db) {
+        try {
+            const snapshot = await db.ref('investments').get();
+            if (snapshot.exists()) {
+                PARTICIPANTS = Object.keys(snapshot.val()).sort();
+                console.log('Discovered participants from Firebase:', PARTICIPANTS);
+                return;
+            }
+        } catch (error) {
+            console.warn('Could not load participants from Firebase, falling back to CSV:', error);
+        }
+    }
+
+    // Fallback: probe for CSV files
     const candidateNames = [
         'Alpha', 'Bravo', 'Charlie', 'Delta', 'Echo',
         'Foxtrot', 'Golf', 'Hotel', 'India', 'Juliet',
@@ -123,24 +138,16 @@ async function discoverParticipants() {
         'Papa', 'Quebec', 'Romeo', 'Sierra', 'Tango',
         'Uniform', 'Victor', 'Whiskey', 'X-ray', 'Yankee', 'Zulu'
     ];
-    
-    PARTICIPANTS = [];
-    
-    // Try to load each candidate and only include those that exist
+
     const promises = candidateNames.map(async name => {
         try {
             const response = await fetch(`data/investments/${name}.csv`);
-            if (response.ok) {
-                PARTICIPANTS.push(name);
-            }
-        } catch (error) {
-            // File doesn't exist, skip it
-        }
+            if (response.ok) PARTICIPANTS.push(name);
+        } catch (_) { /* skip */ }
     });
-    
+
     await Promise.all(promises);
-    
-    console.log('Discovered participants:', PARTICIPANTS);
+    console.log('Discovered participants from CSV fallback:', PARTICIPANTS);
 }
 
 // Helper to fetch CSV file
@@ -197,20 +204,60 @@ function parseCSVLine(line) {
     return result;
 }
 
-// Load all CSV data
+// Convert old CSV-format investment rows to monthly format:
+// { '2026_01': ['SYM1', 'SYM2', ...], '2026_02': [...], ... }
+function csvToMonthly(investments) {
+    const monthly = {};
+    investments.forEach(inv => {
+        if (!inv.symbol || !inv.start_date || !inv.end_date) return;
+        const startDate = new Date(inv.start_date);
+        const endDate = new Date(inv.end_date);
+        let current = new Date(startDate.getFullYear(), startDate.getMonth(), 1);
+        const end = new Date(endDate.getFullYear(), endDate.getMonth(), 1);
+        while (current <= end) {
+            const key = `${current.getFullYear()}_${String(current.getMonth() + 1).padStart(2, '0')}`;
+            if (!monthly[key]) monthly[key] = [];
+            if (!monthly[key].includes(inv.symbol)) monthly[key].push(inv.symbol);
+            current.setMonth(current.getMonth() + 1);
+        }
+    });
+    return monthly;
+}
+
+// Load investment data: Firebase first, CSV fallback
 async function loadAllData() {
-    // Load individual participant investment files
+    if (db) {
+        try {
+            const snapshot = await db.ref('investments').get();
+            if (snapshot.exists()) {
+                const data = snapshot.val();
+                // Firebase may turn arrays into {0:..., 1:...} objects — normalise to arrays
+                PARTICIPANTS.forEach(participant => {
+                    const participantData = data[participant] || {};
+                    const monthly = {};
+                    Object.entries(participantData).forEach(([monthKey, symbols]) => {
+                        monthly[monthKey] = Array.isArray(symbols) ? symbols : Object.values(symbols);
+                    });
+                    participantInvestments[participant] = monthly;
+                });
+                console.log('Loaded investments from Firebase');
+                return;
+            }
+        } catch (error) {
+            console.warn('Could not load investments from Firebase, falling back to CSV:', error);
+        }
+    }
+
+    // Fallback: load CSV files and convert to monthly format
     const promises = PARTICIPANTS.map(async participant => {
         try {
             const csvText = await fetchCSV(`data/investments/${participant}.csv`);
-            const investments = parseCSV(csvText);
-            participantInvestments[participant] = investments;
+            participantInvestments[participant] = csvToMonthly(parseCSV(csvText));
         } catch (error) {
             console.warn(`Failed to load investments for ${participant}:`, error);
-            participantInvestments[participant] = [];
+            participantInvestments[participant] = {};
         }
     });
-    
     await Promise.all(promises);
 }
 
@@ -219,18 +266,45 @@ function getParticipants() {
     return PARTICIPANTS.filter(p => Object.keys(participantInvestments).includes(p));
 }
 
-// Get unique symbols from all participants' investments
+// Get unique symbols from all participants' monthly investments
 function getUniqueSymbols() {
     const symbols = new Set();
     PARTICIPANTS.forEach(participant => {
-        const investments = participantInvestments[participant] || [];
-        investments.forEach(inv => {
-            if (inv.symbol) {
-                symbols.add(inv.symbol);
-            }
+        const monthlyData = participantInvestments[participant] || {};
+        Object.values(monthlyData).forEach(symbolsList => {
+            symbolsList.forEach(s => symbols.add(s));
         });
     });
     return Array.from(symbols);
+}
+
+// ── Month key helpers ──────────────────────────────────────────────────────────
+
+// 'YYYY-MM-DD' → 'YYYY_MM'
+function getMonthKey(date) {
+    const [year, month] = date.split('-');
+    return `${year}_${month}`;
+}
+
+// 'YYYY_MM' → 'YYYY-MM-01'
+function getFirstDayOfMonth(monthKey) {
+    const [year, month] = monthKey.split('_');
+    return `${year}-${month.padStart(2, '0')}-01`;
+}
+
+// 'YYYY_MM' → first calendar day of next month as 'YYYY-MM-01'
+function getNextMonthFirstDay(monthKey) {
+    const [y, m] = monthKey.split('_').map(Number);
+    const nextMonth = m === 12 ? 1 : m + 1;
+    const nextYear  = m === 12 ? y + 1 : y;
+    return `${nextYear}-${String(nextMonth).padStart(2, '0')}-01`;
+}
+
+// Return the list of symbols a participant holds in the month containing `date`
+function getMonthlySymbols(participant, date) {
+    const key = getMonthKey(date);
+    const monthlyData = participantInvestments[participant] || {};
+    return monthlyData[key] || [];
 }
 
 // Load price data for all investment symbols
@@ -318,66 +392,137 @@ function getPriceOnOrBeforeDate(symbol, date) {
 }
 
 // Get active investments for a participant on a specific date
+// Returns an array of symbol strings for the month that contains `date`
 function getActiveInvestments(participant, date) {
-    const investments = participantInvestments[participant] || [];
-    return investments.filter(inv => {
-        // Check if date is within start_date and end_date (inclusive)
-        return date >= inv.start_date && date <= inv.end_date;
-    });
+    return getMonthlySymbols(participant, date);
 }
 
-// Calculate portfolio values for all participants across all dates
+// Calculate portfolio values for all participants across all dates.
+//
+// Model:
+//   • On the first trading day of each month participants buy their 10 symbols
+//     in equal weights using whatever cash they hold.
+//   • They sell everything on the first trading day of the next month and the
+//     proceeds become the starting cash for that month.
+//   • Everyone starts with £50 on 2026-01-01.
 function calculatePortfolioValues() {
     const participants = getParticipants();
     const allDates = getAllDates();
-    
+
     if (allDates.length === 0) {
         console.warn('No price data available');
-        // Don't throw here, just warn. The charts will be empty but no crash.
         return;
     }
-    
-    // Initialize portfolio data structure
+
+    // Initialise every cell to STARTING_AMOUNT
     calculatedPortfolioData = allDates.map(date => {
         const row = { date };
-        participants.forEach(p => row[p] = 0);
+        participants.forEach(p => row[p] = STARTING_AMOUNT);
         return row;
     });
-    
-    // Calculate portfolio value for each participant on each date
+
     participants.forEach(participant => {
+        const monthlyData = participantInvestments[participant] || {};
+        const sortedMonths = Object.keys(monthlyData).sort();
+        if (sortedMonths.length === 0) return;
+
+        // ── First pass: compute startValue / buyPrices / shares / endValue per month ──
+        const monthInfo = {};
+        let prevEndValue = STARTING_AMOUNT;
+
+        sortedMonths.forEach(monthKey => {
+            const symbols = monthlyData[monthKey] || [];
+            const firstOfMonth    = getFirstDayOfMonth(monthKey);
+            const nextMonthFirst  = getNextMonthFirstDay(monthKey);
+
+            const startValue      = prevEndValue;
+            const investPerSymbol = symbols.length > 0 ? startValue / symbols.length : 0;
+
+            const buyPrices = {};
+            const shares    = {};
+
+            symbols.forEach(symbol => {
+                const buyPrice = getPriceOnOrAfterDate(symbol, firstOfMonth);
+                if (buyPrice && investPerSymbol > 0) {
+                    buyPrices[symbol] = buyPrice;
+                    shares[symbol]    = investPerSymbol / buyPrice;
+                }
+            });
+
+            // End value = sell everything at the first available price on/after next month's 1st
+            let endValue    = 0;
+            let hasEndPrice = false;
+
+            symbols.forEach(symbol => {
+                const numShares = shares[symbol];
+                if (!numShares) return;
+
+                // Try to sell at the first trading day of next month
+                let sellPrice = getPriceOnOrAfterDate(symbol, nextMonthFirst);
+                if (!sellPrice) {
+                    // Next month not available yet — use latest known price
+                    sellPrice = getPriceOnOrBeforeDate(symbol, allDates[allDates.length - 1]);
+                }
+                if (!sellPrice) sellPrice = buyPrices[symbol] || 0; // last resort
+
+                endValue    += numShares * sellPrice;
+                hasEndPrice  = true;
+            });
+
+            if (!hasEndPrice) endValue = startValue;
+
+            monthInfo[monthKey] = { symbols, startValue, buyPrices, shares, endValue };
+            prevEndValue = endValue;
+        });
+
+        // ── Second pass: fill daily portfolio values ──
+        const firstMonthStart = getFirstDayOfMonth(sortedMonths[0]);
+        const lastMonth       = sortedMonths[sortedMonths.length - 1];
+
         allDates.forEach((date, dateIndex) => {
-            const activeInvestments = getActiveInvestments(participant, date);
-            let portfolioValue = 0;
-            
-            if (activeInvestments.length > 0) {
-                // Split capital equally among active investments
-                const investmentAmount = STARTING_AMOUNT / activeInvestments.length;
-                
-                activeInvestments.forEach(investment => {
-                    const symbol = investment.symbol;
-                    const startDate = investment.start_date;
-                    
-                    // Use price on or after start date for the buy price
-                    const startPrice = getPriceOnOrAfterDate(symbol, startDate);
-                    // Use price on or before current date for current value
-                    const currentPrice = getPriceOnOrBeforeDate(symbol, date);
-                    
-                    if (startPrice && currentPrice) {
-                        const shares = investmentAmount / startPrice;
-                        const currentValue = shares * currentPrice;
-                        portfolioValue += currentValue;
-                    } else {
-                        // If we can't determine value, assume it maintains cost basis
-                        portfolioValue += investmentAmount;
-                    }
-                });
-            } else {
-                // No investments yet, maintain starting amount (cash)
-                portfolioValue = STARTING_AMOUNT;
+            const monthKey = getMonthKey(date);
+            const info     = monthInfo[monthKey];
+
+            if (!info) {
+                // Date falls outside any month with investment data
+                if (date < firstMonthStart) {
+                    calculatedPortfolioData[dateIndex][participant] = STARTING_AMOUNT;
+                } else {
+                    // Find the most recent invested month before this date
+                    const prevMonth = sortedMonths.filter(m => m < monthKey).pop();
+                    calculatedPortfolioData[dateIndex][participant] =
+                        prevMonth && monthInfo[prevMonth]
+                            ? monthInfo[prevMonth].endValue
+                            : STARTING_AMOUNT;
+                }
+                return;
             }
-            
-            calculatedPortfolioData[dateIndex][participant] = portfolioValue;
+
+            const { symbols, startValue, buyPrices, shares } = info;
+
+            if (symbols.length === 0) {
+                calculatedPortfolioData[dateIndex][participant] = startValue;
+                return;
+            }
+
+            let value    = 0;
+            let hasPrice = false;
+
+            symbols.forEach(symbol => {
+                const numShares    = shares[symbol];
+                if (!numShares) return;
+                const currentPrice = getPriceOnOrBeforeDate(symbol, date);
+                if (currentPrice) {
+                    value    += numShares * currentPrice;
+                    hasPrice  = true;
+                } else {
+                    // No price yet for this date — hold at cost
+                    value    += numShares * (buyPrices[symbol] || 0);
+                    hasPrice  = true;
+                }
+            });
+
+            calculatedPortfolioData[dateIndex][participant] = hasPrice ? value : startValue;
         });
     });
 }
@@ -1088,25 +1233,19 @@ function renderMonthlyPerformanceChart() {
     const allDates = getAllDates();
     if (allDates.length === 0) return;
     
-    const latestDate = allDates[allDates.length - 1]; // e.g., "2026-01-14"
-    // Get start of month from latest date
-    // Format is YYYY-MM-DD
-    const parts = latestDate.split('-');
-    const year = parts[0];
-    const month = parts[1];
-    const firstOfMonth = `${year}-${month}-01`;
+    const latestDate   = allDates[allDates.length - 1];
+    const monthKey     = getMonthKey(latestDate);
+    const firstOfMonth = getFirstDayOfMonth(monthKey);
 
-    // Active investments for this user
-    const activeInvestments = getActiveInvestments(currentUser, latestDate);
+    // Symbols this user holds this month
+    const symbols = getMonthlySymbols(currentUser, latestDate);
     
     const labels = [];
     const data = [];
     const backgroundColors = [];
     const borderColors = [];
 
-    activeInvestments.forEach(inv => {
-        const symbol = inv.symbol;
-        
+    symbols.forEach(symbol => {
         // Use price on or after first of month
         const startPrice = getPriceOnOrAfterDate(symbol, firstOfMonth);
         // Use price on or before latest date
@@ -1186,32 +1325,20 @@ function renderUserPortfolioTable() {
     
     tbody.innerHTML = '';
     
-    // Get active investments for current date (using context: Jan 14, 2026)
-    // In a real scenario, this might use current system date, but here we use context.
-    // However, calculatePortfolioValues uses strict dates. 
-    // To be safe, let's just list ALL unique symbols the user has invested in for the year 2026.
-    // As per rules, substitution is monthly, so "portfolio" is dynamic.
-    // The prompt asks for "symbols the user is invested in".
-    const investments = participantInvestments[currentUser] || [];
+    const allDates  = getAllDates();
+    const latestDate = allDates.length > 0 ? allDates[allDates.length - 1] : '';
+    const symbols    = latestDate ? getMonthlySymbols(currentUser, latestDate) : [];
     
-    // Unique symbols
-    const userSymbols = [...new Set(investments.map(inv => inv.symbol))];
-    
-    userSymbols.sort();
-    
-    userSymbols.forEach(symbol => {
+    [...symbols].sort().forEach(symbol => {
         const meta = getSymbolMetadata(symbol);
         const tr = document.createElement('tr');
-        
         const categoryClass = getCategoryClass(meta.category);
-        
         tr.innerHTML = `
             <td><strong>${symbol}</strong></td>
             <td>${meta.name}</td>
             <td><span class="category-badge ${categoryClass}">${meta.category}</span></td>
             <td>${meta.sector}</td>
         `;
-        
         tbody.appendChild(tr);
     });
 }
@@ -1846,7 +1973,7 @@ async function checkAndTriggerRefresh() {
             resolve();
         } catch (error) {
             console.error('Refresh failed:', error);
-            showRefreshError('Failed to refresh market data. You can retry or continue with existing data.');
+            showRefreshError(`❌ ${error.message}`);
             // resolve() is called by skipRefresh() or retryRefresh() via button
         }
     });
@@ -1854,6 +1981,23 @@ async function checkAndTriggerRefresh() {
 
 // Fetches all 61 symbols from Yahoo Finance and writes prices to Firebase.
 // Sets meta/lastRefresh as the very last step.
+// Fetch a Yahoo Finance crumb. Requires the user to have Yahoo cookies in their browser
+// (i.e. they have visited finance.yahoo.com at some point). Falls back to null if unavailable.
+async function fetchYahooCrumb() {
+    try {
+        const resp = await fetch('https://query1.finance.yahoo.com/v1/test/getcrumb', {
+            credentials: 'include',
+        });
+        if (resp.ok) {
+            const crumb = (await resp.text()).trim();
+            if (crumb && crumb.length > 0) return crumb;
+        }
+    } catch (e) {
+        // CORS or network error — crumb unavailable
+    }
+    return null;
+}
+
 async function refreshSymbolData(yesterday) {
     const symbols = Object.keys(SYMBOL_METADATA);
     const total = symbols.length;
@@ -1868,44 +2012,67 @@ async function refreshSymbolData(yesterday) {
         refreshStartedAt: Date.now(),
     });
 
+    // Yahoo Finance now requires a crumb for authenticated requests.
+    // Attempt to get one using any existing Yahoo cookies in the browser.
+    updateRefreshProgress('Authenticating with Yahoo Finance...', 0, 0);
+    const crumb = await fetchYahooCrumb();
+
+    let successCount = 0;
+    let firstError = null;
+
     for (let i = 0; i < symbols.length; i++) {
         const symbol = symbols[i];
         const ticker = YAHOO_TICKER_MAP[symbol] || symbol;
         updateRefreshProgress(symbol, i + 1, total);
 
         try {
-            const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}` +
-                        `?interval=1d&period1=${REFRESH_START_UNIX}&period2=${period2}`;
-            const resp = await fetch(url);
-            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+            let url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}` +
+                      `?interval=1d&period1=${REFRESH_START_UNIX}&period2=${period2}`;
+            if (crumb) url += `&crumb=${encodeURIComponent(crumb)}`;
+
+            const fetchOpts = crumb ? { credentials: 'include' } : {};
+            const resp = await fetch(url, fetchOpts);
+            if (!resp.ok) throw new Error(`HTTP ${resp.status} for ${ticker}`);
 
             const json = await resp.json();
             const result = json?.chart?.result?.[0];
 
-            if (result) {
-                const timestamps = result.timestamp || [];
-                const closes = result.indicators?.adjclose?.[0]?.adjclose
-                             || result.indicators?.quote?.[0]?.close
-                             || [];
+            if (!result) throw new Error(`No data returned for ${ticker}`);
 
-                const prices = {};
-                timestamps.forEach((ts, idx) => {
-                    const val = closes[idx];
-                    if (val !== null && val !== undefined && !isNaN(val)) {
-                        prices[new Date(ts * 1000).toISOString().split('T')[0]] = val;
-                    }
-                });
+            const timestamps = result.timestamp || [];
+            const closes = result.indicators?.adjclose?.[0]?.adjclose
+                         || result.indicators?.quote?.[0]?.close
+                         || [];
 
-                if (Object.keys(prices).length > 0) {
-                    await db.ref(`symbols/${symbol}/prices`).set(prices);
+            const prices = {};
+            timestamps.forEach((ts, idx) => {
+                const val = closes[idx];
+                if (val !== null && val !== undefined && !isNaN(val)) {
+                    prices[new Date(ts * 1000).toISOString().split('T')[0]] = val;
                 }
-            }
+            });
+
+            if (Object.keys(prices).length === 0) throw new Error(`Empty price data for ${ticker}`);
+
+            await db.ref(`symbols/${symbol}/prices`).set(prices);
+            successCount++;
         } catch (err) {
-            console.warn(`Failed to refresh ${symbol} (${ticker}):`, err);
+            console.warn(`Failed to refresh ${symbol} (${ticker}):`, err.message);
+            if (!firstError) firstError = err.message;
         }
 
         // Small delay between requests to avoid rate-limiting
         await new Promise(r => setTimeout(r, 200));
+    }
+
+    if (successCount === 0) {
+        // Nothing was written — release the lock and surface the error
+        await db.ref('meta').update({ refreshInProgress: false });
+        throw new Error(
+            `Could not fetch any market data from Yahoo Finance.\n` +
+            `First error: ${firstError || 'unknown'}.\n` +
+            `Visit https://finance.yahoo.com in a new tab to ensure you have a session, then retry.`
+        );
     }
 
     // Update lastRefresh last — this is the signal that the refresh is complete
