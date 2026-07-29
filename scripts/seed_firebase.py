@@ -167,7 +167,7 @@ def main():
     print(f"\nSetting meta/lastRefresh = {yesterday} ... ", end="", flush=True)
     print("OK" if set_meta(yesterday) else "FAILED")
 
-    seed_investments()
+    # seed_investments()
 
     print("\nDone! The app will use Firebase data and skip a refresh on first login today.")
 
