@@ -1221,13 +1221,6 @@ function updateSymbolsTabForUser() {
 
 // ── Month maths (mirrors the production growth-factor model) ─────────────────
 
-// 'YYYY-MM-DD' → previous calendar day as 'YYYY-MM-DD'
-function getPreviousDay(dateStr) {
-    const d = new Date(`${dateStr}T00:00:00`);
-    d.setDate(d.getDate() - 1);
-    return d.toISOString().split('T')[0];
-}
-
 // 'YYYY_MM' → next month's key
 function getNextMonthKey(monthKey) {
     const [y, m] = monthKey.split('_').map(Number);
@@ -1237,26 +1230,43 @@ function getNextMonthKey(monthKey) {
 }
 
 // Equal-weighted growth factor for one month: G_M = (1/|S|) Σ (sell / buy)
-// Returns null when the month has no portfolio or no usable prices yet.
+//
+// Buy  = first traded price on or after the 1st of the month.
+// Sell = first traded price on or after the 1st of the *following* month, so
+//        months are contiguous with no gap. For the month still in progress
+//        that price doesn't exist yet, so the latest known price is used.
+// This matches calculatePortfolioValues() exactly, which is what the
+// leaderboard's % return is built from.
 function getMonthlyGrowthFactor(participant, monthKey) {
     const symbols = (participantInvestments[participant] || {})[monthKey] || [];
     if (symbols.length === 0) return null;
 
+    const allDates = getAllDates();
+    if (allDates.length === 0) return null;
+    const latestDate = allDates[allDates.length - 1];
+
     const firstDay = getFirstDayOfMonth(monthKey);
-    const lastDay = getPreviousDay(getNextMonthFirstDay(monthKey));
+    const nextMonthFirst = getNextMonthFirstDay(monthKey);
 
     let sum = 0;
     let counted = 0;
     symbols.forEach(symbol => {
         const buy = getPriceOnOrAfterDate(symbol, firstDay);
-        const sell = getPriceOnOrBeforeDate(symbol, lastDay);
-        if (buy && sell && buy > 0) {
-            sum += sell / buy;
-            counted++;
-        }
+        if (!buy || buy <= 0) return;
+
+        const sell = getPriceOnOrAfterDate(symbol, nextMonthFirst)
+            || getPriceOnOrBeforeDate(symbol, latestDate)
+            || buy;
+
+        sum += sell / buy;
+        counted++;
     });
 
-    return counted > 0 ? sum / counted : null;
+    if (counted === 0) return null;
+
+    // Divide by the full portfolio size: a symbol with no price data holds
+    // cash that never gets invested, exactly as the value model treats it.
+    return sum / symbols.length;
 }
 
 // r_M% = (G_M − 1) × 100
