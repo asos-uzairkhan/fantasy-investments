@@ -624,13 +624,14 @@ function populateRankingsTable() {
         const profitClass = rank.profitLoss >= 0 ? 'profit' : 'loss';
         const returnClass = rank.return >= 0 ? 'profit' : 'loss';
         const vsSP500Class = rank.vsSP500 >= 0 ? 'beating-sp500' : 'behind-sp500';
+        const joined = getJoinedMonth(rank.name);
         
         tr.innerHTML = `
             <td>${index + 1}</td>
             <td>${rank.name} ${index === 0 ? '👑' : ''}</td>
             <td>£${rank.value.toFixed(2)}</td>
             <td class="${profitClass}">
-                ${rank.profitLoss >= 0 ? '+' : ''}£${rank.profitLoss.toFixed(2)}
+                ${rank.profitLoss >= 0 ? '+' : '−'}£${Math.abs(rank.profitLoss).toFixed(2)}
             </td>
             <td class="${returnClass}">
                 ${rank.return.toFixed(2)}%
@@ -638,6 +639,7 @@ function populateRankingsTable() {
             <td class="${vsSP500Class}">
                 ${rank.vsSP500 >= 0 ? '+' : ''}${rank.vsSP500.toFixed(2)}%
             </td>
+            <td>${joined ? joined.replace('_', '-') : '—'}</td>
         `;
         
         tbody.appendChild(tr);
@@ -672,7 +674,7 @@ function createTornadoChart() {
                     const pIndex = PARTICIPANTS.indexOf(r.name);
                     return pIndex >= 0 ? COLORS[pIndex % COLORS.length] : COLORS[i % COLORS.length];
                 }),
-                borderColor: 'rgba(0,0,0,0.1)',
+                borderColor: 'rgba(255,255,255,0.15)',
                 borderWidth: 1
             }]
         },
@@ -695,7 +697,7 @@ function createTornadoChart() {
             scales: {
                 x: {
                     grid: {
-                        color: '#f0f0f0'
+                        color: 'rgba(139, 147, 171, 0.12)'
                     },
                     title: {
                         display: true,
@@ -758,7 +760,7 @@ function createLineChart() {
         datasets.push({
             label: 'S&P 500',
             data: spData,
-            borderColor: '#000000',
+            borderColor: '#e8ecf5',
             borderDash: [5, 5],
             borderWidth: 2,
             pointRadius: 0,
@@ -802,7 +804,7 @@ function createLineChart() {
                 },
                 y: {
                     grid: {
-                        color: '#f0f0f0'
+                        color: 'rgba(139, 147, 171, 0.12)'
                     },
                     title: {
                         display: true,
@@ -999,7 +1001,7 @@ function createSingleSymbolChart(symbol) {
                 },
                 y: {
                     grid: {
-                        color: '#f0f0f0'
+                        color: 'rgba(139, 147, 171, 0.12)'
                     },
                     title: {
                         display: true,
@@ -1107,7 +1109,7 @@ function createMultiSymbolChart(symbols, startDate) {
                 },
                 y: {
                     grid: {
-                        color: '#f0f0f0'
+                        color: 'rgba(139, 147, 171, 0.12)'
                     },
                     title: {
                         display: true,
@@ -1207,65 +1209,226 @@ function showLoginError(message) {
     }
 }
 
+// ─── My Portfolio tab ─────────────────────────────────────────────────────────
+
 function updateSymbolsTabForUser() {
-    // Switch sections
-    const individualSection = document.getElementById('individual-symbol-section');
-    const userSection = document.getElementById('user-portfolio-section');
-    const monthlySection = document.getElementById('monthly-performance-section');
-    
-    if (individualSection) individualSection.style.display = 'none';
-    if (userSection) userSection.style.display = 'block';
-    if (monthlySection) monthlySection.style.display = 'block';
-    
-    // Create Table
     renderUserPortfolioTable();
-    // Create Chart
-    renderMonthlyPerformanceChart();
+    setupReferenceWidget();
+    setupMonthlyHistory();
+    initNextMonthEditor();
+    initAccountSettings();
 }
 
-function renderMonthlyPerformanceChart() {
-    const canvas = document.getElementById('monthlyPerformanceChart');
-    if (!canvas || !currentUser) return;
+// ── Month maths (mirrors the production growth-factor model) ─────────────────
 
-    const ctx = canvas.getContext('2d');
-    
-    // Determine dates
+// 'YYYY-MM-DD' → previous calendar day as 'YYYY-MM-DD'
+function getPreviousDay(dateStr) {
+    const d = new Date(`${dateStr}T00:00:00`);
+    d.setDate(d.getDate() - 1);
+    return d.toISOString().split('T')[0];
+}
+
+// 'YYYY_MM' → next month's key
+function getNextMonthKey(monthKey) {
+    const [y, m] = monthKey.split('_').map(Number);
+    const nextMonth = m === 12 ? 1 : m + 1;
+    const nextYear = m === 12 ? y + 1 : y;
+    return `${nextYear}_${String(nextMonth).padStart(2, '0')}`;
+}
+
+// Equal-weighted growth factor for one month: G_M = (1/|S|) Σ (sell / buy)
+// Returns null when the month has no portfolio or no usable prices yet.
+function getMonthlyGrowthFactor(participant, monthKey) {
+    const symbols = (participantInvestments[participant] || {})[monthKey] || [];
+    if (symbols.length === 0) return null;
+
+    const firstDay = getFirstDayOfMonth(monthKey);
+    const lastDay = getPreviousDay(getNextMonthFirstDay(monthKey));
+
+    let sum = 0;
+    let counted = 0;
+    symbols.forEach(symbol => {
+        const buy = getPriceOnOrAfterDate(symbol, firstDay);
+        const sell = getPriceOnOrBeforeDate(symbol, lastDay);
+        if (buy && sell && buy > 0) {
+            sum += sell / buy;
+            counted++;
+        }
+    });
+
+    return counted > 0 ? sum / counted : null;
+}
+
+// r_M% = (G_M − 1) × 100
+function getMonthlyReturnPct(participant, monthKey) {
+    const g = getMonthlyGrowthFactor(participant, monthKey);
+    return g === null ? null : (g - 1) * 100;
+}
+
+// Month keys that actually have a portfolio, oldest first
+function getParticipantMonthKeys(participant) {
+    return Object.keys(participantInvestments[participant] || {})
+        .filter(key => (participantInvestments[participant][key] || []).length > 0)
+        .sort();
+}
+
+// The month the participant joined, e.g. '2026_01'
+function getJoinedMonth(participant) {
+    const keys = getParticipantMonthKeys(participant);
+    return keys.length > 0 ? keys[0] : null;
+}
+
+// G_cum = Π G_M over every month with data so far
+function getCumulativeGrowth(participant) {
+    return getParticipantMonthKeys(participant).reduce((acc, key) => {
+        const g = getMonthlyGrowthFactor(participant, key);
+        return g === null ? acc : acc * g;
+    }, 1);
+}
+
+// The month currently in progress (derived from the latest price date)
+function getCurrentMonthKey() {
     const allDates = getAllDates();
-    if (allDates.length === 0) return;
-    
-    const latestDate   = allDates[allDates.length - 1];
-    const monthKey     = getMonthKey(latestDate);
+    return allDates.length > 0 ? getMonthKey(allDates[allDates.length - 1]) : null;
+}
+
+function formatMonthLabel(monthKey) {
+    if (!monthKey) return '';
+    const [year, month] = monthKey.split('_');
+    const names = ['January', 'February', 'March', 'April', 'May', 'June',
+                   'July', 'August', 'September', 'October', 'November', 'December'];
+    return `${names[Number(month) - 1]} ${year}`;
+}
+
+// ── Current holdings table ───────────────────────────────────────────────────
+
+function renderUserPortfolioTable() {
+    const tbody = document.getElementById('portfolio-body');
+    if (!tbody || !currentUser) return;
+
+    const allDates = getAllDates();
+    const latestDate = allDates.length > 0 ? allDates[allDates.length - 1] : '';
+    const monthKey = latestDate ? getMonthKey(latestDate) : null;
+    const symbols = latestDate ? getMonthlySymbols(currentUser, latestDate) : [];
+
+    const label = document.getElementById('current-month-label');
+    if (label) label.textContent = formatMonthLabel(monthKey);
+
+    tbody.innerHTML = '';
+
+    if (symbols.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="5" class="empty-cell">No holdings for this month yet.</td></tr>';
+        return;
+    }
+
     const firstOfMonth = getFirstDayOfMonth(monthKey);
 
-    // Symbols this user holds this month
-    const symbols = getMonthlySymbols(currentUser, latestDate);
-    
-    const labels = [];
+    [...symbols].sort().forEach(symbol => {
+        const meta = getSymbolMetadata(symbol);
+        const buy = getPriceOnOrAfterDate(symbol, firstOfMonth);
+        const now = getPriceOnOrBeforeDate(symbol, latestDate);
+        const roi = (buy && now && buy > 0) ? ((now - buy) / buy) * 100 : null;
+
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+            <td><strong>${symbol}</strong></td>
+            <td>${meta.name}</td>
+            <td><span class="category-badge ${getCategoryClass(meta.category)}">${meta.category}</span></td>
+            <td>${meta.sector}</td>
+            <td class="${roi === null ? '' : (roi >= 0 ? 'profit' : 'loss')}">
+                ${roi === null ? '—' : `${roi >= 0 ? '+' : ''}${roi.toFixed(2)}%`}
+            </td>
+        `;
+        tbody.appendChild(tr);
+    });
+}
+
+// ── "See this in cash" widget (transient, never saved) ───────────────────────
+
+function setupReferenceWidget() {
+    const input = document.getElementById('reference-amount');
+    if (!input) return;
+    input.removeEventListener('input', updateReferenceAmount);
+    input.addEventListener('input', updateReferenceAmount);
+    updateReferenceAmount();
+}
+
+function updateReferenceAmount() {
+    const input = document.getElementById('reference-amount');
+    const result = document.getElementById('reference-result');
+    const note = document.getElementById('reference-note');
+    if (!input || !result || !currentUser) return;
+
+    const amount = parseFloat(input.value);
+    const growth = getCumulativeGrowth(currentUser);
+    const returnPct = (growth - 1) * 100;
+
+    if (isNaN(amount) || amount < 0) {
+        result.textContent = '—';
+        if (note) note.textContent = '';
+        return;
+    }
+
+    result.textContent = `£${(amount * growth).toFixed(2)}`;
+    if (note) {
+        const joined = getJoinedMonth(currentUser);
+        note.textContent = `${returnPct >= 0 ? '+' : ''}${returnPct.toFixed(2)}% since ${formatMonthLabel(joined)} · never saved`;
+    }
+}
+
+// ── Monthly performance history (bar chart + multi-year table) ───────────────
+
+function setupMonthlyHistory() {
+    const select = document.getElementById('history-year-select');
+    if (!select || !currentUser) return;
+
+    const years = [...new Set(getParticipantMonthKeys(currentUser).map(key => key.split('_')[0]))].sort();
+
+    select.innerHTML = '';
+    years.forEach(year => {
+        const option = document.createElement('option');
+        option.value = year;
+        option.textContent = year;
+        select.appendChild(option);
+    });
+
+    // Default to the most recent year with data
+    if (years.length > 0) select.value = years[years.length - 1];
+
+    select.removeEventListener('change', handleHistoryYearChange);
+    select.addEventListener('change', handleHistoryYearChange);
+
+    renderMonthlyPerformanceChart(select.value);
+    renderMonthlyHistoryTable(years);
+}
+
+function handleHistoryYearChange(event) {
+    renderMonthlyPerformanceChart(event.target.value);
+}
+
+function renderMonthlyPerformanceChart(year) {
+    const canvas = document.getElementById('monthlyPerformanceChart');
+    if (!canvas || !currentUser || !year) return;
+
+    const ctx = canvas.getContext('2d');
+    const labels = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
     const data = [];
     const backgroundColors = [];
     const borderColors = [];
 
-    symbols.forEach(symbol => {
-        // Use price on or after first of month
-        const startPrice = getPriceOnOrAfterDate(symbol, firstOfMonth);
-        // Use price on or before latest date
-        const currentPrice = getPriceOnOrBeforeDate(symbol, latestDate);
-        
-        if (startPrice && currentPrice) {
-            const roi = ((currentPrice - startPrice) / startPrice) * 100;
-            labels.push(symbol);
-            data.push(roi);
-            
-            // Color coding
-            if (roi >= 0) {
-                backgroundColors.push('rgba(46, 204, 113, 0.6)'); // Green
-                borderColors.push('rgba(46, 204, 113, 1)');
-            } else {
-                backgroundColors.push('rgba(231, 76, 60, 0.6)'); // Red
-                borderColors.push('rgba(231, 76, 60, 1)');
-            }
+    for (let month = 1; month <= 12; month++) {
+        const monthKey = `${year}_${String(month).padStart(2, '0')}`;
+        const roi = getMonthlyReturnPct(currentUser, monthKey);
+        data.push(roi);
+
+        if (roi !== null && roi < 0) {
+            backgroundColors.push('rgba(248, 113, 113, 0.55)');
+            borderColors.push('rgba(248, 113, 113, 1)');
+        } else {
+            backgroundColors.push('rgba(52, 211, 153, 0.55)');
+            borderColors.push('rgba(52, 211, 153, 1)');
         }
-    });
+    }
 
     if (monthlyPerformanceChartInstance) {
         monthlyPerformanceChartInstance.destroy();
@@ -1276,41 +1439,38 @@ function renderMonthlyPerformanceChart() {
         data: {
             labels: labels,
             datasets: [{
-                label: 'ROI (%)',
+                label: 'Monthly return (%)',
                 data: data,
                 backgroundColor: backgroundColors,
                 borderColor: borderColors,
-                borderWidth: 1
+                borderWidth: 1,
+                borderRadius: 6
             }]
         },
         options: {
             responsive: true,
             maintainAspectRatio: false,
             plugins: {
-                legend: {
-                    display: false
-                },
-                title: {
-                    display: true,
-                    text: `Performance from ${firstOfMonth} to ${latestDate}`
-                },
+                legend: { display: false },
                 tooltip: {
                     callbacks: {
                         label: function(context) {
-                            return `${context.raw.toFixed(2)}%`;
+                            if (context.raw === null) return 'No data yet';
+                            return `${context.raw >= 0 ? '+' : ''}${context.raw.toFixed(2)}%`;
                         }
                     }
                 }
             },
             scales: {
+                x: {
+                    grid: { display: false }
+                },
                 y: {
                     beginAtZero: true,
-                    grid: {
-                        color: '#f0f0f0'
-                    },
-                    title: {
-                        display: true,
-                        text: 'Return on Investment (%)'
+                    grid: { color: 'rgba(139, 147, 171, 0.12)' },
+                    title: { display: true, text: 'Monthly return (%)' },
+                    ticks: {
+                        callback: function(value) { return `${value}%`; }
                     }
                 }
             }
@@ -1318,30 +1478,340 @@ function renderMonthlyPerformanceChart() {
     });
 }
 
+function renderMonthlyHistoryTable(years) {
+    const head = document.getElementById('monthly-history-head');
+    const body = document.getElementById('monthly-history-body');
+    if (!head || !body || !currentUser) return;
 
-function renderUserPortfolioTable() {
-    const tbody = document.getElementById('portfolio-body');
-    if (!tbody || !currentUser) return;
-    
-    tbody.innerHTML = '';
-    
-    const allDates  = getAllDates();
-    const latestDate = allDates.length > 0 ? allDates[allDates.length - 1] : '';
-    const symbols    = latestDate ? getMonthlySymbols(currentUser, latestDate) : [];
-    
-    [...symbols].sort().forEach(symbol => {
-        const meta = getSymbolMetadata(symbol);
+    const labels = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+    head.innerHTML = `<tr><th>Year</th>${labels.map(m => `<th>${m}</th>`).join('')}<th>Year total</th></tr>`;
+    body.innerHTML = '';
+
+    years.forEach(year => {
+        const cells = [];
+        let yearGrowth = 1;
+        let hasData = false;
+
+        for (let month = 1; month <= 12; month++) {
+            const monthKey = `${year}_${String(month).padStart(2, '0')}`;
+            const roi = getMonthlyReturnPct(currentUser, monthKey);
+            if (roi === null) {
+                cells.push('<td class="empty-cell">—</td>');
+            } else {
+                hasData = true;
+                yearGrowth *= 1 + roi / 100;
+                cells.push(`<td class="${roi >= 0 ? 'profit' : 'loss'}">${roi >= 0 ? '+' : ''}${roi.toFixed(2)}%</td>`);
+            }
+        }
+
+        const total = (yearGrowth - 1) * 100;
+        const totalCell = hasData
+            ? `<td class="${total >= 0 ? 'profit' : 'loss'}">${total >= 0 ? '+' : ''}${total.toFixed(2)}%</td>`
+            : '<td class="empty-cell">—</td>';
+
         const tr = document.createElement('tr');
-        const categoryClass = getCategoryClass(meta.category);
-        tr.innerHTML = `
-            <td><strong>${symbol}</strong></td>
-            <td>${meta.name}</td>
-            <td><span class="category-badge ${categoryClass}">${meta.category}</span></td>
-            <td>${meta.sector}</td>
-        `;
-        tbody.appendChild(tr);
+        tr.innerHTML = `<td>${year}</td>${cells.join('')}${totalCell}`;
+        body.appendChild(tr);
     });
 }
+
+// ─── Next Month portfolio editor ──────────────────────────────────────────────
+
+let nextMonthKey = null;
+let nextMonthPicks = [];
+let symbolFilter = 'all';
+let symbolSearch = '';
+
+function initNextMonthEditor() {
+    if (!currentUser) return;
+
+    const currentKey = getCurrentMonthKey();
+    if (!currentKey) return;
+
+    nextMonthKey = getNextMonthKey(currentKey);
+
+    const label = document.getElementById('next-month-label');
+    if (label) label.textContent = formatMonthLabel(nextMonthKey);
+
+    // Carry forward the current month's picks if next month isn't set up yet
+    const stored = (participantInvestments[currentUser] || {})[nextMonthKey];
+    if (stored && stored.length > 0) {
+        nextMonthPicks = [...stored];
+    } else {
+        nextMonthPicks = [...((participantInvestments[currentUser] || {})[currentKey] || [])];
+    }
+
+    const search = document.getElementById('symbol-search');
+    if (search) {
+        search.value = '';
+        symbolSearch = '';
+        search.removeEventListener('input', handleSymbolSearch);
+        search.addEventListener('input', handleSymbolSearch);
+    }
+
+    document.querySelectorAll('#category-filters .filter-chip').forEach(chip => {
+        chip.removeEventListener('click', handleCategoryFilter);
+        chip.addEventListener('click', handleCategoryFilter);
+    });
+    symbolFilter = 'all';
+
+    renderSymbolBrowser();
+    renderPicksList();
+}
+
+function handleSymbolSearch(event) {
+    symbolSearch = event.target.value.trim().toLowerCase();
+    renderSymbolBrowser();
+}
+
+function handleCategoryFilter(event) {
+    symbolFilter = event.currentTarget.dataset.category;
+    document.querySelectorAll('#category-filters .filter-chip').forEach(chip => {
+        chip.classList.toggle('active', chip === event.currentTarget);
+    });
+    renderSymbolBrowser();
+}
+
+// Year-to-date return for a symbol, used as a hint in the picker
+function getSymbolYtdReturn(symbol) {
+    const prices = symbolPricesData[symbol] || [];
+    if (prices.length === 0) return null;
+    const year = prices[prices.length - 1].date.split('-')[0];
+    const start = getPriceOnOrAfterDate(symbol, `${year}-01-01`);
+    const latest = parseFloat(prices[prices.length - 1].value);
+    if (!start || !latest || start <= 0) return null;
+    return ((latest - start) / start) * 100;
+}
+
+function renderSymbolBrowser() {
+    const container = document.getElementById('symbol-browser');
+    if (!container) return;
+
+    const symbols = Object.keys(symbolPricesData).sort().filter(symbol => {
+        const meta = getSymbolMetadata(symbol);
+        const category = (meta.category || '').toLowerCase();
+        if (symbolFilter !== 'all' && category !== symbolFilter) return false;
+        if (symbolSearch &&
+            !symbol.toLowerCase().includes(symbolSearch) &&
+            !(meta.name || '').toLowerCase().includes(symbolSearch)) return false;
+        return true;
+    });
+
+    if (symbols.length === 0) {
+        container.innerHTML = '<div class="empty-state">No investments match your search.</div>';
+        return;
+    }
+
+    container.innerHTML = '';
+    symbols.forEach(symbol => {
+        const meta = getSymbolMetadata(symbol);
+        const picked = nextMonthPicks.includes(symbol);
+        const ytd = getSymbolYtdReturn(symbol);
+
+        const row = document.createElement('div');
+        row.className = `symbol-row${picked ? ' is-picked' : ''}`;
+        row.innerHTML = `
+            <div class="symbol-row-main">
+                <span class="symbol-row-ticker">${symbol}</span>
+                <span class="symbol-row-name">${meta.name}</span>
+            </div>
+            <span class="category-badge ${getCategoryClass(meta.category)}">${meta.category}</span>
+            <span class="symbol-row-ytd ${ytd === null ? '' : (ytd >= 0 ? 'profit' : 'loss')}">
+                ${ytd === null ? '—' : `${ytd >= 0 ? '+' : ''}${ytd.toFixed(1)}%`}
+            </span>
+            <button class="symbol-add-btn" ${picked ? 'disabled' : ''}
+                    title="${picked ? 'Already picked' : `Add ${symbol}`}"
+                    aria-label="${picked ? 'Already picked' : `Add ${symbol}`}">+</button>
+        `;
+        const addBtn = row.querySelector('.symbol-add-btn');
+        if (!picked) addBtn.addEventListener('click', () => addPick(symbol));
+        container.appendChild(row);
+    });
+}
+
+function renderPicksList() {
+    const container = document.getElementById('picks-list');
+    const count = document.getElementById('picks-count');
+    if (!container) return;
+
+    if (count) count.textContent = nextMonthPicks.length;
+
+    if (nextMonthPicks.length === 0) {
+        container.innerHTML = '<div class="empty-state">No investments picked yet. Add at least one from the list.</div>';
+        return;
+    }
+
+    container.innerHTML = '';
+    [...nextMonthPicks].sort().forEach(symbol => {
+        const meta = getSymbolMetadata(symbol);
+        const row = document.createElement('div');
+        row.className = 'symbol-row';
+        row.innerHTML = `
+            <div class="symbol-row-main">
+                <span class="symbol-row-ticker">${symbol}</span>
+                <span class="symbol-row-name">${meta.name}</span>
+            </div>
+            <span class="category-badge ${getCategoryClass(meta.category)}">${meta.category}</span>
+            <button class="symbol-remove-btn" title="Remove ${symbol}" aria-label="Remove ${symbol}">×</button>
+        `;
+        row.querySelector('.symbol-remove-btn').addEventListener('click', () => removePick(symbol));
+        container.appendChild(row);
+    });
+}
+
+function addPick(symbol) {
+    if (nextMonthPicks.includes(symbol)) return; // the only rule: no duplicates
+    nextMonthPicks.push(symbol);
+    renderSymbolBrowser();
+    renderPicksList();
+    saveNextMonthPortfolio();
+}
+
+function removePick(symbol) {
+    nextMonthPicks = nextMonthPicks.filter(s => s !== symbol);
+    renderSymbolBrowser();
+    renderPicksList();
+    saveNextMonthPortfolio();
+}
+
+async function saveNextMonthPortfolio() {
+    if (!currentUser || !nextMonthKey) return;
+
+    // Keep the in-memory model in sync so charts/tables reflect the change
+    if (!participantInvestments[currentUser]) participantInvestments[currentUser] = {};
+    participantInvestments[currentUser][nextMonthKey] = [...nextMonthPicks];
+
+    if (!db) {
+        showSaveIndicator('Saved locally');
+        return;
+    }
+
+    try {
+        await db.ref(`investments/${currentUser}/${nextMonthKey}`).set([...nextMonthPicks].sort());
+        showSaveIndicator('Saved');
+    } catch (error) {
+        console.warn('Failed to save next month portfolio:', error);
+        showToast('Could not save your picks. Check your connection.', 'error');
+    }
+}
+
+function showSaveIndicator(text) {
+    const indicator = document.getElementById('save-indicator');
+    if (!indicator) return;
+    indicator.textContent = `✓ ${text}`;
+    indicator.classList.add('visible');
+    clearTimeout(indicator._hideTimer);
+    indicator._hideTimer = setTimeout(() => indicator.classList.remove('visible'), 2000);
+}
+
+// ─── Account Settings ─────────────────────────────────────────────────────────
+
+function initAccountSettings() {
+    if (!currentUser) return;
+
+    const usernameEl = document.getElementById('settings-username');
+    if (usernameEl) usernameEl.textContent = currentUser;
+
+    loadAccountEmail();
+
+    const saveEmailBtn = document.getElementById('save-email-btn');
+    if (saveEmailBtn) {
+        saveEmailBtn.removeEventListener('click', saveAccountEmail);
+        saveEmailBtn.addEventListener('click', saveAccountEmail);
+    }
+
+    const changePwBtn = document.getElementById('settings-change-password');
+    if (changePwBtn) {
+        changePwBtn.removeEventListener('click', openChangePasswordModal);
+        changePwBtn.addEventListener('click', openChangePasswordModal);
+    }
+
+    setupDeleteAccountModal();
+}
+
+function openChangePasswordModal() {
+    const modal = document.getElementById('change-password-modal');
+    if (modal) modal.style.display = 'flex';
+    document.getElementById('current-password-input')?.focus();
+}
+
+async function loadAccountEmail() {
+    const input = document.getElementById('settings-email');
+    if (!input || !db || !currentUser) return;
+    try {
+        const snapshot = await db.ref(`meta/accounts/${currentUser}/email`).get();
+        input.value = snapshot.exists() ? snapshot.val() : '';
+    } catch (error) {
+        console.warn('Could not load account email:', error);
+    }
+}
+
+async function saveAccountEmail() {
+    const input = document.getElementById('settings-email');
+    if (!input || !currentUser) return;
+
+    const email = input.value.trim();
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        showToast('That doesn\'t look like a valid email address.', 'error');
+        return;
+    }
+
+    if (!db) {
+        showToast('Not connected — your email could not be saved.', 'error');
+        return;
+    }
+
+    try {
+        await db.ref(`meta/accounts/${currentUser}/email`).set(email || null);
+        showToast(email ? 'Email saved.' : 'Email removed.', 'success');
+    } catch (error) {
+        console.warn('Could not save account email:', error);
+        showToast('Could not save your email. Check your connection.', 'error');
+    }
+}
+
+function setupDeleteAccountModal() {
+    const openBtn = document.getElementById('delete-account-btn');
+    const modal = document.getElementById('delete-account-modal');
+    const cancelBtn = document.getElementById('delete-account-cancel');
+    const confirmBtn = document.getElementById('delete-account-confirm');
+    if (!modal) return;
+
+    const close = () => { modal.style.display = 'none'; };
+
+    if (openBtn) {
+        openBtn.onclick = () => { modal.style.display = 'flex'; };
+    }
+    if (cancelBtn) cancelBtn.onclick = close;
+    modal.onclick = (e) => { if (e.target === modal) close(); };
+
+    if (confirmBtn) {
+        confirmBtn.onclick = () => {
+            close();
+            // Preview build: the production site soft-deletes the account here.
+            showToast('Preview only — the production site would soft-delete your account.', 'success');
+        };
+    }
+}
+
+// ─── Toasts ───────────────────────────────────────────────────────────────────
+
+function showToast(message, type = 'info') {
+    const container = document.getElementById('toast-container');
+    if (!container) return;
+
+    const toast = document.createElement('div');
+    toast.className = `toast toast-${type}`;
+    toast.textContent = message;
+    container.appendChild(toast);
+
+    setTimeout(() => {
+        toast.classList.add('toast-hiding');
+        setTimeout(() => toast.remove(), 250);
+    }, 3500);
+}
+
 
 function getCategoryClass(category) {
     if (!category) return 'category-other';
