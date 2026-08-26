@@ -55,7 +55,7 @@ STOCKS = [
     'SHEL',         # Shell
     'SLB',          # Schlumberger
     'SONY',         # Sony
-    'ROG.SW',       # Roche Holding AG
+    'RO.SW',        # Roche Holding AG
     'TSLA',         # Tesla
     'V',            # Visa
     '005930.KS',    # Samsung Electronics
@@ -113,7 +113,7 @@ SYMBOL_MAPPING = {
     'GSK.L': 'GSK',
     'BP.L': 'BP',
     'BRK-B': 'BRK',
-    'ROG.SW': 'ROG',
+    'RO.SW': 'ROG',
     'HIWS.L': 'HIWS',
     'NOVN.SW': 'NOVN',
     'CJ6.F': 'CJ6',
